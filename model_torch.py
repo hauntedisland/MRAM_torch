@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from torch_scatter import scatter_mean
 
 
-
 # LightGCN: 更新user, item embedding→self.all_emb
 class GraphConv(nn.Module):
     def __init__(self, all_emb, adj_mat, conv_layers, n_users, n_items):
@@ -38,25 +37,34 @@ class Disentangle(nn.Module):
         self.n_intent = n_intent
         self.n_relation = n_relation
         self.emb_size = channel
-        # print(self.emb_size,self.n_users,self.n_intent,self.n_relation)
+        # 将relation解耦和intent解耦矩阵设置为可学习的
+        initializer = nn.init.xavier_uniform_
+        weight = initializer(torch.empty(n_relation - 1, channel))  # not include interact
+        self.weight = nn.Parameter(weight)  # [n_relations - 1, in_channel]
+        # 解耦矩阵的初始化 [intent, n_relation-1]
+        disen_weight_att = initializer(torch.empty(n_intent, self.n_relation - 1))
+        self.disen_weight_att = nn.Parameter(disen_weight_att)
+
     """latent_emb: relation emb
         weight: relation weight
     """
-
-    def forward(self, user_emb, disen_weight_att, relation_emb):
+# TODO: check 'weight' parameter necessity, figure out disentangle
+    def forward(self, user_emb, relation_emb):
         # [n_intent, n_relation] * [n_relation, dim] = [n_intent, dim]
-        # 扩展到[n_user, n_intent, dim]. editable: 给所有user的weight都是一样的
-        disen_weight = torch.mm(nn.Softmax(dim=-1)(disen_weight_att), relation_emb).unsqueeze(0).expand(self.n_users, -1, -1)
+        # 扩展到[n_user, n_intent, dim].
+        # TODO: 目前给所有user的weight都是一样的，没有personalized
+        disen_weight = torch.mm(nn.Softmax(dim=-1)(self.disen_weight_att), self.weight).unsqueeze(0).expand(
+            self.n_users, -1, -1)
         user_emb1 = user_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
         # user_emb1 = user_emb.unsqueeze(2)
         # user_int = torch.matmul(user_emb1, disen_weight.transpose(1, 2))
         user_int = user_emb1 * disen_weight
-        # 对relation嵌入也做映射
-        # [relation, n_intent, dim]
+        # 对relation嵌入也做映射: [relation, n_intent, dim]
         relation_emb1 = relation_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
-        r_int_emb = torch.matmul(relation_emb1, disen_weight)
-        # return user_int, r_int_emb
-        return user_int
+        # r_int_emb = torch.matmul(relation_emb1, disen_weight)
+        r_int_emb = relation_emb1 * disen_weight
+        return user_int, r_int_emb
+
 
 class MRAM(nn.Module):
     def __init__(self, data_config, args_config, graph, adj_mat):
@@ -102,10 +110,10 @@ class MRAM(nn.Module):
         user = batch['users']
         pos_item = batch['pos_items']
         neg_item = batch['neg_items']
-
+        # 更新all_emb
         user_emb, item_emb = self.encoder()
 
-        # disentangle的矩阵
+        # TODO: edit trainable parameter: intent_emb? relation_emb? weight?
         user_int_emb, r_int_emb = self.decoder(user_emb, self.intent_emb)
         # u_e = user_int_emb[user]
         # pos_e, neg_e = item_emb[pos_item], item_emb[neg_item]
@@ -116,7 +124,7 @@ class MRAM(nn.Module):
             pos_e = item_emb[pos_item]
             neg_e = item_emb[neg_item]
             losses.append(self.create_bpr_loss(u_e, pos_e, neg_e))
-        # 重构loss写在哪儿
+        # TODO: reconstruction loss
         return sum(losses) / len(losses)
 
     def create_bpr_loss(self, users, pos_items, neg_items):
@@ -128,7 +136,11 @@ class MRAM(nn.Module):
 
         return mf_loss
 
+# TODO: edit decoder
+    def generate(self):
+        user_emb, item_emb = self.encoder()
+        user_int_emb, item_emb = self.decoder(user_emb)
+        return user_int_emb, item_emb
 
-
-
-
+    def rating(self, u_g_embeddings, i_g_embeddings):
+        return torch.matmul(u_g_embeddings, i_g_embeddings.t())
