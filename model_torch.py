@@ -49,7 +49,8 @@ class Disentangle(nn.Module):
         weight: relation weight
     """
 # TODO: check 'weight' parameter necessity, figure out disentangle
-    def forward(self, user_emb, relation_emb):
+    # - use weight and disen_weight, remove relation_emb
+    def forward(self, user_emb):
         # [n_intent, n_relation] * [n_relation, dim] = [n_intent, dim]
         # 扩展到[n_user, n_intent, dim].
         # TODO: 目前给所有user的weight都是一样的，没有personalized
@@ -60,10 +61,10 @@ class Disentangle(nn.Module):
         # user_int = torch.matmul(user_emb1, disen_weight.transpose(1, 2))
         user_int = user_emb1 * disen_weight
         # 对relation嵌入也做映射: [relation, n_intent, dim]
-        relation_emb1 = relation_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
+        # relation_emb1 = relation_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
         # r_int_emb = torch.matmul(relation_emb1, disen_weight)
-        r_int_emb = relation_emb1 * disen_weight
-        return user_int, r_int_emb
+        # r_int_emb = relation_emb1 * disen_weight
+        return user_int
 
 
 class MRAM(nn.Module):
@@ -87,7 +88,7 @@ class MRAM(nn.Module):
 
         self._init_weight()
         self.all_embed = nn.Parameter(self.all_embed)
-        self.intent_emb = nn.Parameter(self.intent_emb)
+        # self.intent_emb = nn.Parameter(self.intent_emb)
 
         self.encoder = GraphConv(self.all_embed, self.adj_mat, self.n_layer, self.n_users, self.n_items)
         self.decoder = Disentangle(self.emb_size, self.n_users, self.n_intent, self.n_relations)
@@ -95,7 +96,7 @@ class MRAM(nn.Module):
     def _init_weight(self):
         initializer = nn.init.xavier_uniform_
         self.all_embed = initializer(torch.empty(self.n_nodes, self.emb_size))
-        self.intent_emb = initializer(torch.empty(self.n_intent, self.emb_size))  # intent embedding
+        # self.intent_emb = initializer(torch.empty(self.n_intent, self.emb_size))  # intent embedding
 
         # [n_users, n_entities]
         self.interact_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat).to(self.device)
@@ -114,7 +115,7 @@ class MRAM(nn.Module):
         user_emb, item_emb = self.encoder()
 
         # TODO: edit trainable parameter: intent_emb? relation_emb? weight?
-        user_int_emb, r_int_emb = self.decoder(user_emb, self.intent_emb)
+        user_int_emb = self.decoder(user_emb)
         # u_e = user_int_emb[user]
         # pos_e, neg_e = item_emb[pos_item], item_emb[neg_item]
         losses = []
@@ -137,10 +138,12 @@ class MRAM(nn.Module):
         return mf_loss
 
 # TODO: edit decoder
+    # - remove r_int_emb.(11.13)
     def generate(self):
         user_emb, item_emb = self.encoder()
-        user_int_emb, item_emb = self.decoder(user_emb)
+        user_int_emb = self.decoder(user_emb)
         return user_int_emb, item_emb
 
+# TODO: how to rate with each user_int_emb
     def rating(self, u_g_embeddings, i_g_embeddings):
         return torch.matmul(u_g_embeddings, i_g_embeddings.t())

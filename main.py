@@ -97,6 +97,7 @@ if __name__ == '__main__':
                                   user_dict['train_user_set'])
             # model.forward(batch)调用前馈
             # batch_loss, _, _, batch_cor = model(batch)
+            # TODO: edit
             batch_loss = model(batch)
             batch_loss = batch_loss
             optimizer.zero_grad()
@@ -112,6 +113,7 @@ if __name__ == '__main__':
         if epoch % 10 == 9 or epoch == 1:
             """testing"""
             test_s_t = time()
+            # TODO: edit
             ret = test(model, user_dict, n_params)
             test_e_t = time()
 

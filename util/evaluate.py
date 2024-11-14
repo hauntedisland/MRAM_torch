@@ -137,51 +137,57 @@ def test(model, user_dict, n_params):
 
     count = 0
 
-    entity_gcn_emb, user_gcn_emb = model.generate()
+    # TODO: incorporate intent embedding.
+        # - edit embedding based on generate method. (11.13)
+    # entity_gcn_emb, user_gcn_emb = model.generate()
+    user_int_emb, item_emb = model.generate()
 
-    for u_batch_id in range(n_user_batchs):
-        start = u_batch_id * u_batch_size
-        end = (u_batch_id + 1) * u_batch_size
+    for intent_idx in range(model.n_intent):
+        for u_batch_id in range(n_user_batchs):
+            start = u_batch_id * u_batch_size
+            end = (u_batch_id + 1) * u_batch_size
 
-        user_list_batch = test_users[start: end]
-        user_batch = torch.LongTensor(np.array(user_list_batch)).to(device)
-        u_g_embeddings = user_gcn_emb[user_batch]
+            user_list_batch = test_users[start: end]
+            user_batch = torch.LongTensor(np.array(user_list_batch)).to(device)
+            # u_g_embeddings = user_gcn_emb[user_batch]
+            u_g_embeddings = user_int_emb[:, intent_idx, :][user_batch]
 
-        if batch_test_flag:
-            # batch-item test
-            n_item_batchs = n_items // i_batch_size + 1
-            rate_batch = np.zeros(shape=(len(user_batch), n_items))
+            if batch_test_flag:
+                # batch-item test
+                n_item_batchs = n_items // i_batch_size + 1
+                rate_batch = np.zeros(shape=(len(user_batch), n_items))
 
-            i_count = 0
-            for i_batch_id in range(n_item_batchs):
-                i_start = i_batch_id * i_batch_size
-                i_end = min((i_batch_id + 1) * i_batch_size, n_items)
+                i_count = 0
+                for i_batch_id in range(n_item_batchs):
+                    i_start = i_batch_id * i_batch_size
+                    i_end = min((i_batch_id + 1) * i_batch_size, n_items)
 
-                item_batch = torch.LongTensor(np.array(range(i_start, i_end))).view(i_end - i_start).to(device)
-                i_g_embddings = entity_gcn_emb[item_batch]
+                    item_batch = torch.LongTensor(np.array(range(i_start, i_end))).view(i_end - i_start).to(device)
+                    i_g_embeddings = item_emb[item_batch]
 
-                i_rate_batch = model.rating(u_g_embeddings, i_g_embddings).detach().cpu()
+                    i_rate_batch = model.rating(u_g_embeddings, i_g_embeddings).detach().cpu()
 
-                rate_batch[:, i_start: i_end] = i_rate_batch
-                i_count += i_rate_batch.shape[1]
+                    rate_batch[:, i_start: i_end] = i_rate_batch
+                    i_count += i_rate_batch.shape[1]
 
-            assert i_count == n_items
-        else:
-            # all-item test
-            item_batch = torch.LongTensor(np.array(range(0, n_items))).view(n_items, -1).to(device)
-            i_g_embddings = entity_gcn_emb[item_batch]
-            rate_batch = model.rating(u_g_embeddings, i_g_embddings).detach().cpu()
+                assert i_count == n_items
+            else:
+                # all-item test
+                item_batch = torch.LongTensor(np.array(range(0, n_items))).view(n_items, -1).to(device)
+                i_g_embeddings = item_emb[item_batch]
+                rate_batch = model.rating(u_g_embeddings, i_g_embeddings).detach().cpu()
 
-        user_batch_rating_uid = zip(rate_batch, user_list_batch)
-        batch_result = pool.map(test_one_user, user_batch_rating_uid)
-        count += len(batch_result)
-
-        for re in batch_result:
-            result['precision'] += re['precision'] / n_test_users
-            result['recall'] += re['recall'] / n_test_users
-            result['ndcg'] += re['ndcg'] / n_test_users
-            result['hit_ratio'] += re['hit_ratio'] / n_test_users
-            result['auc'] += re['auc'] / n_test_users
+            user_batch_rating_uid = zip(rate_batch, user_list_batch)
+            # TODO: edit test_one_user function?
+            batch_result = pool.map(test_one_user, user_batch_rating_uid)
+            count += len(batch_result)
+            # TODO: edit metric calculation for intents?
+            for re in batch_result:
+                result['precision'] += re['precision'] / n_test_users
+                result['recall'] += re['recall'] / n_test_users
+                result['ndcg'] += re['ndcg'] / n_test_users
+                result['hit_ratio'] += re['hit_ratio'] / n_test_users
+                result['auc'] += re['auc'] / n_test_users
 
     assert count == n_test_users
     pool.close()
