@@ -111,11 +111,17 @@ def test_one_user(x):
 
 
 def test(model, user_dict, n_params):
-    result = {'precision': np.zeros(len(Ks)),
-              'recall': np.zeros(len(Ks)),
-              'ndcg': np.zeros(len(Ks)),
-              'hit_ratio': np.zeros(len(Ks)),
-              'auc': 0.}
+    # result = {'precision': np.zeros(len(Ks)),
+    #           'recall': np.zeros(len(Ks)),
+    #           'ndcg': np.zeros(len(Ks)),
+    #           'hit_ratio': np.zeros(len(Ks)),
+    #           'auc': 0.}
+
+    total_precision_per_intent = [0] * model.n_intent
+    total_recall_per_intent = [0] * model.n_intent
+    total_ndcg_per_intent = [0] * model.n_intent
+    total_hit_ratio_per_intent = [0] * model.n_intent
+    total_auc_per_intent = [0] * model.n_intent
 
     # global n_users, n_items
     n_items = n_params['n_items']
@@ -179,15 +185,29 @@ def test(model, user_dict, n_params):
 
             user_batch_rating_uid = zip(rate_batch, user_list_batch)
             # TODO: edit test_one_user function?
+            # - 不用，每次u_g_embeddings给入不一样
             batch_result = pool.map(test_one_user, user_batch_rating_uid)
             count += len(batch_result)
             # TODO: edit metric calculation for intents?
+            # for re in batch_result:
+            #     result['precision'] += re['precision'] / n_test_users
+            #     result['recall'] += re['recall'] / n_test_users
+            #     result['ndcg'] += re['ndcg'] / n_test_users
+            #     result['hit_ratio'] += re['hit_ratio'] / n_test_users
+            #     result['auc'] += re['auc'] / n_test_users
             for re in batch_result:
-                result['precision'] += re['precision'] / n_test_users
-                result['recall'] += re['recall'] / n_test_users
-                result['ndcg'] += re['ndcg'] / n_test_users
-                result['hit_ratio'] += re['hit_ratio'] / n_test_users
-                result['auc'] += re['auc'] / n_test_users
+                total_precision_per_intent[intent_idx] += re['precision']
+                total_recall_per_intent[intent_idx] += re['recall']
+                total_ndcg_per_intent[intent_idx] += re['ndcg']
+                total_hit_ratio_per_intent[intent_idx] += re['hit_ratio']
+                total_auc_per_intent[intent_idx] += re['auc']
+
+    result = {}
+    result['precision'] = sum(total_precision_per_intent) / (n_test_users * model.n_intent)
+    result['recall'] = sum(total_recall_per_intent) / (n_test_users * model.n_intent)
+    result['ndcg'] = sum(total_ndcg_per_intent) / (n_test_users * model.n_intent)
+    result['hit_ratio'] = sum(total_hit_ratio_per_intent) / (n_test_users * model.n_intent)
+    result['auc'] = sum(total_auc_per_intent) / (n_test_users * model.n_intent)
 
     assert count == n_test_users
     pool.close()
