@@ -10,8 +10,8 @@ from torch_scatter import scatter_mean
 class GraphConv(nn.Module):
     def __init__(self, all_emb, adj_mat, conv_layers, n_users, n_items):
         super(GraphConv, self).__init__()
-        self.all_emb = all_emb
-        self.adj_mat = adj_mat
+        self.all_emb = all_emb  # [entity, channel]. change to: [n_user+n_item, n_user+n_item]
+        self.adj_mat = adj_mat  # [user, entity]
         self.convs = conv_layers
         self.n_users = n_users
         self.n_items = n_items
@@ -23,7 +23,7 @@ class GraphConv(nn.Module):
             # 检查形状？
             temp_emb = torch.sparse.mm(self.adj_mat, temp_emb)
             embs.append(temp_emb)
-        print("finish encoding...")
+
         embs = torch.stack(embs, dim=1)
         light_out = torch.mean(embs, dim=1)
         user_emb, item_emb = torch.split(light_out, [self.n_users, self.n_items])
@@ -74,11 +74,11 @@ class MRAM(nn.Module):
         self.n_users = data_config['n_users']
         self.n_items = data_config['n_items']
         self.n_relations = data_config['n_relations']
-        self.n_entities = data_config['n_entities']  # include items
-        self.n_nodes = data_config['n_nodes']
+        self.n_entities = data_config['n_entities']  # include items!
+        self.n_nodes = data_config['n_nodes']   # entity + user
 
         self.n_intent = args_config.n_intent
-        self.emb_size = args_config.embed_size
+        self.emb_size = args_config.dim
         self.n_layer = args_config.n_layer  # encoder layer
         self.device = torch.device("cuda:" + str(args_config.gpu_id)) if args_config.cuda \
             else torch.device("cpu")
@@ -90,12 +90,13 @@ class MRAM(nn.Module):
         self.all_embed = nn.Parameter(self.all_embed)
         # self.intent_emb = nn.Parameter(self.intent_emb)
 
-        self.encoder = GraphConv(self.all_embed, self.adj_mat, self.n_layer, self.n_users, self.n_items)
+        self.encoder = GraphConv(self.all_embed, self.interact_mat, self.n_layer, self.n_users, self.n_items)
         self.decoder = Disentangle(self.emb_size, self.n_users, self.n_intent, self.n_relations)
 
     def _init_weight(self):
         initializer = nn.init.xavier_uniform_
-        self.all_embed = initializer(torch.empty(self.n_nodes, self.emb_size))
+        # self.all_embed = initializer(torch.empty(self.n_nodes, self.emb_size))
+        self.all_embed = initializer(torch.empty(self.n_users + self.n_items, self.emb_size))
         # self.intent_emb = initializer(torch.empty(self.n_intent, self.emb_size))  # intent embedding
 
         # [n_users, n_entities]

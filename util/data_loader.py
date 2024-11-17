@@ -7,6 +7,7 @@ import random
 from time import time
 from collections import defaultdict
 import warnings
+
 warnings.filterwarnings('ignore')
 
 n_users = 0
@@ -89,6 +90,33 @@ def build_graph(train_data, triplets):
     return ckg_graph, rd
 
 
+def build_adj_matrix(relation_dict):
+    def _si_norm_lap(adj):
+        # D^{-1}A
+        rowsum = np.array(adj.sum(1))
+
+        d_inv = np.power(rowsum, -1).flatten()
+        d_inv[np.isinf(d_inv)] = 0.
+        d_mat_inv = sp.diags(d_inv)
+
+        norm_adj = d_mat_inv.dot(adj)
+        return norm_adj.tocoo()
+
+    print("Begin to build adjacent matrix ...")
+    np_mat = np.array(relation_dict[0])
+
+    cf = np_mat.copy()
+    cf[:, 1] = cf[:, 1] + n_users  # [0, n_items) -> [n_users, n_users+n_items)
+    vals = [1.] * len(cf)
+    # TODO: change to: [user+item, user+item]?
+    adj = sp.coo_matrix((vals, (cf[:, 0], cf[:, 1])), shape=(n_users + n_items, n_users + n_items))
+    mean_mat = _si_norm_lap(adj)
+    # mean_mat_list = [_si_norm_lap(mat) for mat in adj_mat_list]
+    # mean_mat = mean_mat.tocsr()[:n_users, n_users:].tocoo()
+    mean_mat = mean_mat.tocsr().tocoo()
+    return mean_mat
+
+
 def build_sparse_relational_graph(relation_dict):
     def _bi_norm_lap(adj):
         # D^{-1/2}AD^{-1/2}
@@ -122,6 +150,7 @@ def build_sparse_relational_graph(relation_dict):
             cf[:, 1] = cf[:, 1] + n_users  # [0, n_items) -> [n_users, n_users+n_items)
             vals = [1.] * len(cf)
             adj = sp.coo_matrix((vals, (cf[:, 0], cf[:, 1])), shape=(n_nodes, n_nodes))
+            # change to: [user+item, user+item]?
         else:
             vals = [1.] * len(np_mat)
             adj = sp.coo_matrix((vals, (np_mat[:, 0], np_mat[:, 1])), shape=(n_nodes, n_nodes))
@@ -147,14 +176,15 @@ def load_data(model_args):
     remap_item(train_cf, test_cf)
 
     print('combinating train_cf and kg data ...')
-    triplets = read_triplets(directory + 'kg_graph.txt')    # change
+    # TODO: change kg file name
+    triplets = read_triplets(directory + 'kg.txt')
 
     print('building the graph ...')
     graph, relation_dict = build_graph(train_cf, triplets)
 
     print('building the adj mat ...')
-    adj_mat_list, norm_mat_list, mean_mat_list = build_sparse_relational_graph(relation_dict)
-
+    # adj_mat_list, norm_mat_list, mean_mat_list = build_sparse_relational_graph(relation_dict)
+    adj_mat_list = build_adj_matrix(relation_dict)
     n_params = {
         'n_users': int(n_users),
         'n_items': int(n_items),
@@ -167,6 +197,6 @@ def load_data(model_args):
         'test_user_set': test_user_set
     }
 
-    return train_cf, test_cf, user_dict, n_params, graph, \
-           [adj_mat_list, norm_mat_list, mean_mat_list]
-
+    return train_cf, test_cf, user_dict, n_params, graph, adj_mat_list
+    # return train_cf, test_cf, user_dict, n_params, graph, \
+    #        [adj_mat_list, norm_mat_list, mean_mat_list]

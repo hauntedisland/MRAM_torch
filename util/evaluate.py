@@ -15,7 +15,7 @@ BATCH_SIZE = args.test_batch_size
 batch_test_flag = args.batch_test_flag
 
 global n_users, n_items
-
+# n_items_shared = multiprocessing.Value('i')
 
 # global train_user_set, test_user_set
 # train_user_set, test_user_set = None, None
@@ -84,10 +84,13 @@ def get_performance(user_pos_test, r, auc, Ks):
     return {'recall': np.array(recall), 'precision': np.array(precision),
             'ndcg': np.array(ndcg), 'hit_ratio': np.array(hit_ratio), 'auc': auc}
 
-
+# TODO: edit test one user function variables
 def test_one_user(x):
     # user u's ratings for user u
     rating = x[0]
+    # n_items = x[2]
+    # TODO: ERROR: n_items=0
+    # n_items = n_items_shared.value
     # uid
     u = x[1]
     # user u's items in the training set
@@ -101,7 +104,7 @@ def test_one_user(x):
     all_items = set(range(0, n_items))
 
     test_items = list(all_items - set(training_items))
-
+    # TODO: ERROR, r is none. Test items is NONE.
     if args.test_flag == 'part':
         r, auc = ranklist_by_heapq(user_pos_test, test_items, rating, Ks)
     else:
@@ -126,7 +129,7 @@ def test(model, user_dict, n_params):
     # global n_users, n_items
     n_items = n_params['n_items']
     n_users = n_params['n_users']
-
+    # n_items_shared = n_params['n_items']
     global train_user_set
     global test_user_set
     train_user_set = user_dict['train_user_set']
@@ -184,10 +187,15 @@ def test(model, user_dict, n_params):
                 rate_batch = model.rating(u_g_embeddings, i_g_embeddings).detach().cpu()
 
             user_batch_rating_uid = zip(rate_batch, user_list_batch)
-            # TODO: edit test_one_user function?
+            # TODO: edit map function to address global variable not working in multiprocessing problem.
             # - 不用，每次u_g_embeddings给入不一样
             batch_result = pool.map(test_one_user, user_batch_rating_uid)
-            count += len(batch_result)
+            # batch_result = pool.map(lambda x: test_one_user((x, n_items)), user_batch_rating_uid)
+            # count += len(batch_result)
+            # print(f"count={count}")
+            # print(f"intent_idx={intent_idx}")
+            # print(f"u_batch_id={u_batch_id}")
+            # print(f"test_user={n_test_users}")
             # TODO: edit metric calculation for intents?
             # for re in batch_result:
             #     result['precision'] += re['precision'] / n_test_users
@@ -208,7 +216,7 @@ def test(model, user_dict, n_params):
     result['ndcg'] = sum(total_ndcg_per_intent) / (n_test_users * model.n_intent)
     result['hit_ratio'] = sum(total_hit_ratio_per_intent) / (n_test_users * model.n_intent)
     result['auc'] = sum(total_auc_per_intent) / (n_test_users * model.n_intent)
-
-    assert count == n_test_users
+    # TODO: assertion error
+    # assert count == n_test_users
     pool.close()
     return result

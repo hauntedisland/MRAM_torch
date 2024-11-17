@@ -57,8 +57,9 @@ if __name__ == '__main__':
     device = torch.device("cuda:"+str(args.gpu_id)) if args.cuda else torch.device("cpu")
 
     """build dataset"""
-    train_cf, test_cf, user_dict, n_params, graph, mat_list = load_data(args)
-    adj_mat_list, norm_mat_list, mean_mat_list = mat_list
+    train_cf, test_cf, user_dict, n_params, graph, adj_mat = load_data(args)    # 修改adj_mat为[user+item, user+item]
+    # train_cf, test_cf, user_dict, n_params, graph, mat_list = load_data(args)
+    # adj_mat_list, norm_mat_list, mean_mat_list = mat_list
 
     n_users = n_params['n_users']
     n_items = n_params['n_items']
@@ -66,12 +67,22 @@ if __name__ == '__main__':
     n_relations = n_params['n_relations']
     n_nodes = n_params['n_nodes']
 
+    print("--data loaded--")
+    print(f"用户数量: {n_users}")
+    print(f"物品数量: {n_items}")
+    print(f"实体数量: {n_entities}")
+    print(f"关系数量: {n_relations}")
+    print(f"节点总数: {n_nodes}")
+    print(f"训练集大小: {len(train_cf)}")
+    print(f"测试集大小: {len(test_cf)}")
+
     """cf data"""
     train_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in train_cf], np.int32))
     test_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in test_cf], np.int32))
 
     """define model"""
-    model = MRAM(n_params, args, graph, mean_mat_list[0]).to(device)
+    model = MRAM(n_params, args, graph, adj_mat).to(device)
+    # model = MRAM(n_params, args, graph, mean_mat_list[0]).to(device)
 
     """define optimizer"""
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -138,6 +149,6 @@ if __name__ == '__main__':
 
         else:
             # logging.info('training loss at epoch %d: %f' % (epoch, loss.item()))
-            print('using time %.4f, training loss at epoch %d: %.4f, cor: %.6f' % (train_e_t - train_s_t, epoch, loss.item(), cor_loss.item()))
+            print('using time %.4f, training loss at epoch %d: %.4f' % (train_e_t - train_s_t, epoch, loss.item()))
 
     print('early stopping at %d, recall@20:%.4f' % (epoch, cur_best_pre_0))
