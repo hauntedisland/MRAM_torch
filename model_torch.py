@@ -57,8 +57,7 @@ class Disentangle(nn.Module):
         disen_weight = torch.mm(nn.Softmax(dim=-1)(self.disen_weight_att), self.weight).unsqueeze(0).expand(
             self.n_users, -1, -1)
         user_emb1 = user_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
-        # user_emb1 = user_emb.unsqueeze(2)
-        # user_int = torch.matmul(user_emb1, disen_weight.transpose(1, 2))
+        
         user_int = (user_emb1 * disen_weight).sum(dim=1)
         # 对relation嵌入也做映射: [relation, n_intent, dim]
         # relation_emb1 = relation_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
@@ -120,7 +119,7 @@ class MRAM(nn.Module):
         u_e = user_int_emb[user]
         pos_e, neg_e = item_emb[pos_item], item_emb[neg_item]
 
-        return self.create_bpr_loss(u_e,pos_e,neg_e)
+        return self.create_bpr_loss(u_e, pos_e, neg_e)
 
     def create_bpr_loss(self, users, pos_items, neg_items):
         batch_size = users.shape[0]

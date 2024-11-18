@@ -92,6 +92,7 @@ def test_one_user(x):
     # user u's ratings for user u
     rating = x[0]
     # TODO: ERROR: n_items=0
+    n_items = 2345
     # uid
     u = x[1]
     # user u's items in the training set

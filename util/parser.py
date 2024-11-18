@@ -26,7 +26,7 @@ def parse_args():
     parser.add_argument("--n_layer", type=int, default=2, help="layer for GNN encoder")
     parser.add_argument("--cuda", type=bool, default=True, help="use gpu or not")
     parser.add_argument("--gpu_id", type=int, default=0, help="gpu id")
-    parser.add_argument('--Ks', nargs='?', default='[10, 20]', help='Output sizes of every layer') # change
+    parser.add_argument('--Ks', nargs='?', default='[20]', help='Output sizes of every layer') # change
     parser.add_argument('--test_flag', nargs='?', default='part',
                         help='Specify the test type from {part, full}, indicating whether the reference is done in mini-batch')
 
