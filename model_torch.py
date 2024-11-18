@@ -44,21 +44,29 @@ class Disentangle(nn.Module):
         # 解耦矩阵的初始化 [intent, n_relation-1]
         disen_weight_att = initializer(torch.empty(n_intent, self.n_relation - 1))
         self.disen_weight_att = nn.Parameter(disen_weight_att)
+        # 方法2权重矩阵
+        sum_mat = initializer(torch.empty(n_intent, 1))
+        self.sum_mat = nn.Parameter(sum_mat)
 
     """latent_emb: relation emb
         weight: relation weight
     """
-# TODO: check 'weight' parameter necessity, figure out disentangle
+
+    # TODO: check 'weight' parameter necessity, figure out disentangle
     # - use weight and disen_weight, remove relation_emb
     def forward(self, user_emb):
         # [n_intent, n_relation] * [n_relation, dim] = [n_intent, dim]
-        # 扩展到[n_user, n_intent, dim].
         # TODO: 目前给所有user的weight都是一样的，没有personalized
         disen_weight = torch.mm(nn.Softmax(dim=-1)(self.disen_weight_att), self.weight).unsqueeze(0).expand(
             self.n_users, -1, -1)
         user_emb1 = user_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
-        
-        user_int = (user_emb1 * disen_weight).sum(dim=1)
+        # user_int: [n_user, n_intent, channel]
+        # TODO: 方法1直接相加
+        # user_int = (user_emb1 * disen_weight).sum(dim=1)
+        # TODO: 方法2设置trainable权重矩阵相乘，压缩
+        user_int = user_emb1 * disen_weight
+        sum_mat = self.sum_mat.unsqueeze(0).expand(self.n_users, -1, -1)
+        user_int = torch.matmul(user_int, sum_mat).squeeze(1)
         # 对relation嵌入也做映射: [relation, n_intent, dim]
         # relation_emb1 = relation_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
         # r_int_emb = torch.matmul(relation_emb1, disen_weight)
@@ -74,7 +82,7 @@ class MRAM(nn.Module):
         self.n_items = data_config['n_items']
         self.n_relations = data_config['n_relations']
         self.n_entities = data_config['n_entities']  # include items!
-        self.n_nodes = data_config['n_nodes']   # entity + user
+        self.n_nodes = data_config['n_nodes']  # entity + user
 
         self.n_intent = args_config.n_intent
         self.emb_size = args_config.dim
@@ -130,13 +138,10 @@ class MRAM(nn.Module):
 
         return mf_loss
 
-# TODO: edit decoder
-    # - remove r_int_emb.(11.13)
     def generate(self):
         user_emb, item_emb = self.encoder()
         user_int_emb = self.decoder(user_emb)
         return user_int_emb, item_emb
 
-# TODO: how to rate with each user_int_emb
     def rating(self, u_g_embeddings, i_g_embeddings):
         return torch.matmul(u_g_embeddings, i_g_embeddings.t())
