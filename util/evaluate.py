@@ -15,6 +15,8 @@ BATCH_SIZE = args.test_batch_size
 batch_test_flag = args.batch_test_flag
 
 global n_users, n_items
+
+
 # n_items_shared = multiprocessing.Value('i')
 
 # global train_user_set, test_user_set
@@ -84,13 +86,12 @@ def get_performance(user_pos_test, r, auc, Ks):
     return {'recall': np.array(recall), 'precision': np.array(precision),
             'ndcg': np.array(ndcg), 'hit_ratio': np.array(hit_ratio), 'auc': auc}
 
+
 # TODO: edit test one user function variables
 def test_one_user(x):
     # user u's ratings for user u
     rating = x[0]
-    # n_items = x[2]
     # TODO: ERROR: n_items=0
-    # n_items = n_items_shared.value
     # uid
     u = x[1]
     # user u's items in the training set
@@ -114,22 +115,16 @@ def test_one_user(x):
 
 
 def test(model, user_dict, n_params):
-    # result = {'precision': np.zeros(len(Ks)),
-    #           'recall': np.zeros(len(Ks)),
-    #           'ndcg': np.zeros(len(Ks)),
-    #           'hit_ratio': np.zeros(len(Ks)),
-    #           'auc': 0.}
-
-    total_precision_per_intent = [0] * model.n_intent
-    total_recall_per_intent = [0] * model.n_intent
-    total_ndcg_per_intent = [0] * model.n_intent
-    total_hit_ratio_per_intent = [0] * model.n_intent
-    total_auc_per_intent = [0] * model.n_intent
+    result = {'precision': np.zeros(len(Ks)),
+              'recall': np.zeros(len(Ks)),
+              'ndcg': np.zeros(len(Ks)),
+              'hit_ratio': np.zeros(len(Ks)),
+              'auc': 0.}
 
     # global n_users, n_items
     n_items = n_params['n_items']
     n_users = n_params['n_users']
-    # n_items_shared = n_params['n_items']
+
     global train_user_set
     global test_user_set
     train_user_set = user_dict['train_user_set']
@@ -147,76 +142,55 @@ def test(model, user_dict, n_params):
     count = 0
 
     # TODO: incorporate intent embedding.
-        # - edit embedding based on generate method. (11.13)
+    # - edit embedding based on generate method. (11.13)
     # entity_gcn_emb, user_gcn_emb = model.generate()
     user_int_emb, item_emb = model.generate()
 
-    for intent_idx in range(model.n_intent):
-        for u_batch_id in range(n_user_batchs):
-            start = u_batch_id * u_batch_size
-            end = (u_batch_id + 1) * u_batch_size
+    for u_batch_id in range(n_user_batchs):
+        start = u_batch_id * u_batch_size
+        end = (u_batch_id + 1) * u_batch_size
 
-            user_list_batch = test_users[start: end]
-            user_batch = torch.LongTensor(np.array(user_list_batch)).to(device)
-            # u_g_embeddings = user_gcn_emb[user_batch]
-            u_g_embeddings = user_int_emb[:, intent_idx, :][user_batch]
+        user_list_batch = test_users[start: end]
+        user_batch = torch.LongTensor(np.array(user_list_batch)).to(device)
 
-            if batch_test_flag:
-                # batch-item test
-                n_item_batchs = n_items // i_batch_size + 1
-                rate_batch = np.zeros(shape=(len(user_batch), n_items))
+        u_g_embeddings = user_int_emb[user_batch]
 
-                i_count = 0
-                for i_batch_id in range(n_item_batchs):
-                    i_start = i_batch_id * i_batch_size
-                    i_end = min((i_batch_id + 1) * i_batch_size, n_items)
+        if batch_test_flag:
+            # batch-item test
+            n_item_batchs = n_items // i_batch_size + 1
+            rate_batch = np.zeros(shape=(len(user_batch), n_items))
 
-                    item_batch = torch.LongTensor(np.array(range(i_start, i_end))).view(i_end - i_start).to(device)
-                    i_g_embeddings = item_emb[item_batch]
+            i_count = 0
+            for i_batch_id in range(n_item_batchs):
+                i_start = i_batch_id * i_batch_size
+                i_end = min((i_batch_id + 1) * i_batch_size, n_items)
 
-                    i_rate_batch = model.rating(u_g_embeddings, i_g_embeddings).detach().cpu()
-
-                    rate_batch[:, i_start: i_end] = i_rate_batch
-                    i_count += i_rate_batch.shape[1]
-
-                assert i_count == n_items
-            else:
-                # all-item test
-                item_batch = torch.LongTensor(np.array(range(0, n_items))).view(n_items, -1).to(device)
+                item_batch = torch.LongTensor(np.array(range(i_start, i_end))).view(i_end - i_start).to(device)
                 i_g_embeddings = item_emb[item_batch]
-                rate_batch = model.rating(u_g_embeddings, i_g_embeddings).detach().cpu()
 
-            user_batch_rating_uid = zip(rate_batch, user_list_batch)
-            # TODO: edit map function to address global variable not working in multiprocessing problem.
-            # - 不用，每次u_g_embeddings给入不一样
-            batch_result = pool.map(test_one_user, user_batch_rating_uid)
-            # batch_result = pool.map(lambda x: test_one_user((x, n_items)), user_batch_rating_uid)
-            # count += len(batch_result)
-            # print(f"count={count}")
-            # print(f"intent_idx={intent_idx}")
-            # print(f"u_batch_id={u_batch_id}")
-            # print(f"test_user={n_test_users}")
-            # TODO: edit metric calculation for intents?
-            # for re in batch_result:
-            #     result['precision'] += re['precision'] / n_test_users
-            #     result['recall'] += re['recall'] / n_test_users
-            #     result['ndcg'] += re['ndcg'] / n_test_users
-            #     result['hit_ratio'] += re['hit_ratio'] / n_test_users
-            #     result['auc'] += re['auc'] / n_test_users
-            for re in batch_result:
-                total_precision_per_intent[intent_idx] += re['precision']
-                total_recall_per_intent[intent_idx] += re['recall']
-                total_ndcg_per_intent[intent_idx] += re['ndcg']
-                total_hit_ratio_per_intent[intent_idx] += re['hit_ratio']
-                total_auc_per_intent[intent_idx] += re['auc']
+                i_rate_batch = model.rating(u_g_embeddings, i_g_embeddings).detach().cpu()
 
-    result = {}
-    result['precision'] = sum(total_precision_per_intent) / (n_test_users * model.n_intent)
-    result['recall'] = sum(total_recall_per_intent) / (n_test_users * model.n_intent)
-    result['ndcg'] = sum(total_ndcg_per_intent) / (n_test_users * model.n_intent)
-    result['hit_ratio'] = sum(total_hit_ratio_per_intent) / (n_test_users * model.n_intent)
-    result['auc'] = sum(total_auc_per_intent) / (n_test_users * model.n_intent)
-    # TODO: assertion error
-    # assert count == n_test_users
+                rate_batch[:, i_start: i_end] = i_rate_batch
+                i_count += i_rate_batch.shape[1]
+
+            assert i_count == n_items
+        else:
+            # all-item test
+            item_batch = torch.LongTensor(np.array(range(0, n_items))).view(n_items, -1).to(device)
+            i_g_embeddings = item_emb[item_batch]
+            rate_batch = model.rating(u_g_embeddings, i_g_embeddings).detach().cpu()
+
+        user_batch_rating_uid = zip(rate_batch, user_list_batch)
+
+        batch_result = pool.map(test_one_user, user_batch_rating_uid)
+        count += len(batch_result)
+        for re in batch_result:
+            result['precision'] += re['precision']/n_test_users
+            result['recall'] += re['recall']/n_test_users
+            result['ndcg'] += re['ndcg']/n_test_users
+            result['hit_ratio'] += re['hit_ratio']/n_test_users
+            result['auc'] += re['auc']/n_test_users
+
+    assert count == n_test_users
     pool.close()
     return result

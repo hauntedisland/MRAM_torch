@@ -59,7 +59,7 @@ class Disentangle(nn.Module):
         user_emb1 = user_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
         # user_emb1 = user_emb.unsqueeze(2)
         # user_int = torch.matmul(user_emb1, disen_weight.transpose(1, 2))
-        user_int = user_emb1 * disen_weight
+        user_int = (user_emb1 * disen_weight).sum(dim=1)
         # 对relation嵌入也做映射: [relation, n_intent, dim]
         # relation_emb1 = relation_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
         # r_int_emb = torch.matmul(relation_emb1, disen_weight)
@@ -117,17 +117,10 @@ class MRAM(nn.Module):
 
         # TODO: edit trainable parameter: intent_emb? relation_emb? weight?
         user_int_emb = self.decoder(user_emb)
-        # u_e = user_int_emb[user]
-        # pos_e, neg_e = item_emb[pos_item], item_emb[neg_item]
-        losses = []
-        # 对每个intent维度的u_e分别计算loss
-        for idx in range(self.n_intent):
-            u_e = user_int_emb[:, idx, :][user]
-            pos_e = item_emb[pos_item]
-            neg_e = item_emb[neg_item]
-            losses.append(self.create_bpr_loss(u_e, pos_e, neg_e))
-        # TODO: reconstruction loss
-        return sum(losses) / len(losses)
+        u_e = user_int_emb[user]
+        pos_e, neg_e = item_emb[pos_item], item_emb[neg_item]
+
+        return self.create_bpr_loss(u_e,pos_e,neg_e)
 
     def create_bpr_loss(self, users, pos_items, neg_items):
         batch_size = users.shape[0]
