@@ -63,10 +63,14 @@ class Disentangle(nn.Module):
         # user_int: [n_user, n_intent, channel]
         # TODO: 方法1直接相加
         # user_int = (user_emb1 * disen_weight).sum(dim=1)
-        # TODO: 方法2设置trainable权重矩阵相乘，压缩
-        user_int = user_emb1 * disen_weight
-        sum_mat = self.sum_mat.unsqueeze(0).expand(self.n_users, -1, -1)
-        user_int = torch.matmul(user_int, sum_mat).squeeze(1)
+        # TODO: 方法2平均
+        # user_int = torch.mean(user_emb1 * disen_weight, dim=1)
+        # TODO: 方法3设置trainable权重矩阵相乘，压缩
+        # user_int = user_emb1 * disen_weight     # [100,4,64]
+        # sum_mat = self.sum_mat.unsqueeze(0).expand(self.n_users, -1, )    # [100,4,1]
+        # user_int = torch.matmul(user_int, sum_mat).squeeze(1)
+        # TODO: 方法4直接concat做高维度的?
+
         # 对relation嵌入也做映射: [relation, n_intent, dim]
         # relation_emb1 = relation_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
         # r_int_emb = torch.matmul(relation_emb1, disen_weight)
