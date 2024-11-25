@@ -97,7 +97,7 @@ class MRAM(nn.Module):
         initializer = nn.init.xavier_uniform_
         # self.all_embed = initializer(torch.empty(self.n_nodes, self.emb_size))
         self.all_embed = initializer(torch.empty(self.n_users + self.n_items, self.emb_size))
-        # self.intent_emb = initializer(torch.empty(self.n_intent, self.emb_size))  # intent embedding
+        self.relation_emb = initializer(torch.empty(self.n_relations, self.emb_size))  # relation embedding
 
         # [n_users, n_entities]
         self.interact_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat).to(self.device)
