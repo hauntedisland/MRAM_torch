@@ -64,7 +64,7 @@ class Disentangle(nn.Module):
         # TODO: 方法1直接相加
         # user_int = (user_emb1 * disen_weight).sum(dim=1)
         # TODO: 方法2平均
-        # user_int = torch.mean(user_emb1 * disen_weight, dim=1)
+        user_int = torch.mean(user_emb1 * disen_weight, dim=1)
         # TODO: 方法3设置trainable权重矩阵相乘，压缩
         # user_int = user_emb1 * disen_weight     # [100,4,64]
         # sum_mat = self.sum_mat.unsqueeze(0).expand(self.n_users, -1, )    # [100,4,1]
@@ -81,6 +81,8 @@ class Disentangle(nn.Module):
 class MRAM(nn.Module):
     def __init__(self, data_config, args_config, graph, adj_mat):
         super(MRAM, self).__init__()
+        self.decay = args_config.l2
+        self.ssm = args_config.ssm
 
         self.n_users = data_config['n_users']
         self.n_items = data_config['n_items']
@@ -130,8 +132,9 @@ class MRAM(nn.Module):
         user_int_emb = self.decoder(user_emb)
         u_e = user_int_emb[user]
         pos_e, neg_e = item_emb[pos_item], item_emb[neg_item]
-
-        return self.create_bpr_loss(u_e, pos_e, neg_e)
+        ssm_loss = self.ssm_loss(u_e, pos_e)
+        mf_loss = self.create_bpr_loss(u_e, pos_e, neg_e)
+        return ssm_loss + mf_loss
 
     def create_bpr_loss(self, users, pos_items, neg_items):
         batch_size = users.shape[0]
@@ -139,8 +142,27 @@ class MRAM(nn.Module):
         neg_scores = torch.sum(torch.mul(users, neg_items), axis=1)
 
         mf_loss = -1 * torch.mean(nn.LogSigmoid()(pos_scores - neg_scores))
+        regularizer = (torch.norm(users) ** 2
+                       + torch.norm(pos_items) ** 2
+                       + torch.norm(neg_items) ** 2) / 2
+        emb_loss = self.decay * regularizer / batch_size
 
-        return mf_loss
+        return mf_loss + emb_loss
+
+    # TODO: 改成分母是全局的LOSS
+    def ssm_loss(self, users, pos_items):
+        pos_user_norm = F.normalize(users)
+        pos_item_norm = F.normalize(pos_items)
+
+        pos_score = torch.sum(pos_user_norm * pos_item_norm, dim=1)
+        neg_score = torch.matmul(pos_user_norm, pos_item_norm.t())
+
+        pos_score = torch.exp(pos_score / 0.2)
+        neg_score = torch.sum(torch.exp(neg_score / 0.2), dim=1)
+
+        ssm_loss = (-1) * torch.log(pos_score / neg_score)
+        ssm_loss = torch.mean(ssm_loss)
+        return self.ssm * ssm_loss
 
     def generate(self):
         user_emb, item_emb = self.encoder()
