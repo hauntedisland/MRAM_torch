@@ -8,74 +8,63 @@ from torch_scatter import scatter_mean
 
 # LightGCN: 更新user, item embedding→self.all_emb
 class GraphConv(nn.Module):
-    def __init__(self, all_emb, adj_mat, conv_layers, n_users, n_items):
+    def __init__(self, all_emb, relation_emb, adj_mat, conv_layers, n_users, n_items, n_relations):
         super(GraphConv, self).__init__()
-        self.all_emb = all_emb  # [entity, channel]. change to: [n_user+n_item, n_user+n_item]
-        self.adj_mat = adj_mat  # [user, entity]
+        self.ckg_emb = all_emb  # [entity, channel]
+        self.relation_emb = relation_emb
+        self.adj_mat = adj_mat  # [entity+n_relation-1, entity+n_relation-1]
         self.convs = conv_layers
         self.n_users = n_users
         self.n_items = n_items
+        self.n_relation = n_relations - 1
 
     def forward(self):
-        embs = [self.all_emb]
-        temp_emb = self.all_emb
+        # concat node emb and relation emb
+        all_emb = torch.cat((self.ckg_emb, self.relation_emb), dim=0)
+        embs = [all_emb]
+        temp_emb = all_emb
         for i in range(self.convs):
-            # 检查形状？
             temp_emb = torch.sparse.mm(self.adj_mat, temp_emb)
             embs.append(temp_emb)
 
         embs = torch.stack(embs, dim=1)
         light_out = torch.mean(embs, dim=1)
-        user_emb, item_emb = torch.split(light_out, [self.n_users, self.n_items])
-        return user_emb, item_emb
+        user_emb = light_out[:self.n_users, :]
+        item_emb = light_out[self.n_users:self.n_users + self.n_items, :]
+        relation_emb = light_out[self.n_users + self.n_items:self.n_users + self.n_items + self.n_relation, :]
+        return user_emb, item_emb, relation_emb
 
 
 class Disentangle(nn.Module):
-    def __init__(self, channel, n_users, n_intent, n_relation):
+    def __init__(self, channel, n_users, n_items, n_intent, n_relation):
         super(Disentangle, self).__init__()
         self.n_users = n_users
+        self.n_items = n_items
         self.n_intent = n_intent
-        self.n_relation = n_relation
+        self.n_relation = n_relation - 1
         self.emb_size = channel
         # 将relation解耦和intent解耦矩阵设置为可学习的
         initializer = nn.init.xavier_uniform_
-        weight = initializer(torch.empty(n_relation - 1, channel))  # not include interact
+        weight = initializer(torch.empty(self.n_intent, self.n_relation))  # not include interact
         self.weight = nn.Parameter(weight)  # [n_relations - 1, in_channel]
-        # 解耦矩阵的初始化 [intent, n_relation-1]
-        disen_weight_att = initializer(torch.empty(n_intent, self.n_relation - 1))
-        self.disen_weight_att = nn.Parameter(disen_weight_att)
-        # 方法2权重矩阵
-        sum_mat = initializer(torch.empty(n_intent, 1))
-        self.sum_mat = nn.Parameter(sum_mat)
 
-    """latent_emb: relation emb
-        weight: relation weight
-    """
-
-    # TODO: check 'weight' parameter necessity, figure out disentangle
-    # - use weight and disen_weight, remove relation_emb
-    def forward(self, user_emb):
+    def forward(self, user_emb, item_emb, relation_emb):
         # [n_intent, n_relation] * [n_relation, dim] = [n_intent, dim]
         # TODO: 目前给所有user的weight都是一样的，没有personalized
-        disen_weight = torch.mm(nn.Softmax(dim=-1)(self.disen_weight_att), self.weight).unsqueeze(0).expand(
+        disen_weight = torch.mm(nn.Softmax(dim=-1)(self.weight), relation_emb).unsqueeze(0).expand(
             self.n_users, -1, -1)
         user_emb1 = user_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
-        # user_int: [n_user, n_intent, channel]
-        # TODO: 方法1直接相加
-        # user_int = (user_emb1 * disen_weight).sum(dim=1)
-        # TODO: 方法2平均
-        user_int = torch.mean(user_emb1 * disen_weight, dim=1)
-        # TODO: 方法3设置trainable权重矩阵相乘，压缩
-        # user_int = user_emb1 * disen_weight     # [100,4,64]
-        # sum_mat = self.sum_mat.unsqueeze(0).expand(self.n_users, -1, )    # [100,4,1]
-        # user_int = torch.matmul(user_int, sum_mat).squeeze(1)
-        # TODO: 方法4直接concat做高维度的?
 
-        # 对relation嵌入也做映射: [relation, n_intent, dim]
-        # relation_emb1 = relation_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
-        # r_int_emb = torch.matmul(relation_emb1, disen_weight)
-        # r_int_emb = relation_emb1 * disen_weight
-        return user_int
+        # concat user, item embedding to n_intent*dim
+        user_int_emb = user_emb1 * disen_weight
+        user_int_emb = user_int_emb.reshape(self.n_users, self.n_intent*self.emb_size)
+        item_int_emb = torch.cat([item_emb for _ in range(self.n_intent)], dim=1)
+        # mean:
+        # user_int_emb = torch.mean(user_int_emb, dim=1)
+        # item_int_emb = item_emb
+        assert user_int_emb.shape == (self.n_users, self.emb_size*self.n_intent)
+        assert item_int_emb.shape == (self.n_items, self.emb_size*self.n_intent)
+        return user_int_emb, item_int_emb
 
 
 class MRAM(nn.Module):
@@ -92,7 +81,7 @@ class MRAM(nn.Module):
 
         self.n_intent = args_config.n_intent
         self.emb_size = args_config.dim
-        self.n_layer = args_config.n_layer  # encoder layer
+        self.encode_layer = args_config.encode_layer  # encoder layer
         self.device = torch.device("cuda:" + str(args_config.gpu_id)) if args_config.cuda \
             else torch.device("cpu")
 
@@ -101,19 +90,25 @@ class MRAM(nn.Module):
 
         self._init_weight()
         self.all_embed = nn.Parameter(self.all_embed)
+        self.relation_emb = nn.Parameter(self.relation_emb)
         # self.intent_emb = nn.Parameter(self.intent_emb)
-
-        self.encoder = GraphConv(self.all_embed, self.interact_mat, self.n_layer, self.n_users, self.n_items)
-        self.decoder = Disentangle(self.emb_size, self.n_users, self.n_intent, self.n_relations)
+        # CKG encoder
+        self.encoder = GraphConv(self.all_embed, self.relation_emb, self.ckg_mat, self.encode_layer, self.n_users,
+                                 self.n_items, self.n_relations)
+        self.decoder = Disentangle(self.emb_size, self.n_users, self.n_items, self.n_intent, self.n_relations)
+        # self.decoder = Disentangle(self.cf_mat, self.emb_size, self.decode_layer, self.n_users, self.n_items,
+        #                            self.n_intent, self.n_relations)
 
     def _init_weight(self):
         initializer = nn.init.xavier_uniform_
-        # self.all_embed = initializer(torch.empty(self.n_nodes, self.emb_size))
-        self.all_embed = initializer(torch.empty(self.n_users + self.n_items, self.emb_size))
+        self.all_embed = initializer(torch.empty(self.n_nodes, self.emb_size))
+        # self.all_embed = initializer(torch.empty(self.n_users + self.n_items, self.emb_size))
+        self.relation_emb = initializer(torch.empty(self.n_relations - 1, self.emb_size))
         # self.intent_emb = initializer(torch.empty(self.n_intent, self.emb_size))  # intent embedding
 
-        # [n_users, n_entities]
-        self.interact_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat).to(self.device)
+        # [n_users+n_entities, n_users+n_entities]
+        self.ckg_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat).to(self.device)
+        # self.cf_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat_cf).to(self.device)
 
     def _convert_sp_mat_to_sp_tensor(self, X):
         coo = X.tocoo()
@@ -121,20 +116,23 @@ class MRAM(nn.Module):
         v = torch.from_numpy(coo.data).float()
         return torch.sparse.FloatTensor(i, v, coo.shape)
 
+    def _calculate_embedding(self):
+        user_emb, item_emb, relation_emb = self.encoder()
+        user_int_emb, item_int_emb = self.decoder(user_emb, item_emb, relation_emb)
+        return user_int_emb, item_int_emb
+
     def forward(self, batch=None):
         user = batch['users']
         pos_item = batch['pos_items']
         neg_item = batch['neg_items']
         # 更新all_emb
-        user_emb, item_emb = self.encoder()
-
-        # TODO: edit trainable parameter: intent_emb? relation_emb? weight?
-        user_int_emb = self.decoder(user_emb)
+        user_int_emb, item_int_emb = self._calculate_embedding()
         u_e = user_int_emb[user]
-        pos_e, neg_e = item_emb[pos_item], item_emb[neg_item]
-        ssm_loss = self.ssm_loss(u_e, pos_e)
+        pos_e, neg_e = item_int_emb[pos_item], item_int_emb[neg_item]
+        # ssm_loss = self.ssm_loss(u_e, pos_e)
         mf_loss = self.create_bpr_loss(u_e, pos_e, neg_e)
-        return ssm_loss + mf_loss
+        return mf_loss
+        # return ssm_loss + mf_loss
 
     def create_bpr_loss(self, users, pos_items, neg_items):
         batch_size = users.shape[0]
@@ -142,12 +140,13 @@ class MRAM(nn.Module):
         neg_scores = torch.sum(torch.mul(users, neg_items), axis=1)
 
         mf_loss = -1 * torch.mean(nn.LogSigmoid()(pos_scores - neg_scores))
-        regularizer = (torch.norm(users) ** 2
-                       + torch.norm(pos_items) ** 2
-                       + torch.norm(neg_items) ** 2) / 2
-        emb_loss = self.decay * regularizer / batch_size
-
-        return mf_loss + emb_loss
+        # L2
+        # regularizer = (torch.norm(users) ** 2
+        #                + torch.norm(pos_items) ** 2
+        #                + torch.norm(neg_items) ** 2) / 2
+        # emb_loss = self.decay * regularizer / batch_size
+        return mf_loss
+        # return mf_loss + emb_loss
 
     # TODO: 改成分母是全局的LOSS
     def ssm_loss(self, users, pos_items):
@@ -165,9 +164,7 @@ class MRAM(nn.Module):
         return self.ssm * ssm_loss
 
     def generate(self):
-        user_emb, item_emb = self.encoder()
-        user_int_emb = self.decoder(user_emb)
-        return user_int_emb, item_emb
+        return self._calculate_embedding()
 
     def rating(self, u_g_embeddings, i_g_embeddings):
         return torch.matmul(u_g_embeddings, i_g_embeddings.t())

@@ -141,7 +141,6 @@ def build_sparse_relational_graph(relation_dict):
         norm_adj = d_mat_inv.dot(adj)
         return norm_adj.tocoo()
 
-    adj_mat_list = []
     print("Begin to build sparse relation matrix ...")
     for r_id in tqdm(relation_dict.keys()):
         np_mat = np.array(relation_dict[r_id])
@@ -150,19 +149,51 @@ def build_sparse_relational_graph(relation_dict):
             cf[:, 1] = cf[:, 1] + n_users  # [0, n_items) -> [n_users, n_users+n_items)
             vals = [1.] * len(cf)
             adj = sp.coo_matrix((vals, (cf[:, 0], cf[:, 1])), shape=(n_nodes, n_nodes))
-            # change to: [user+item, user+item]?
         else:
-            vals = [1.] * len(np_mat)
-            adj = sp.coo_matrix((vals, (np_mat[:, 0], np_mat[:, 1])), shape=(n_nodes, n_nodes))
-        adj_mat_list.append(adj)
+            # relation_adj_values = np.zeros(n_nodes, dtype=np.float32)
+            # for pair in np_mat:
+            #     head_id = pair[0]
+            #     tail_id = pair[1]
+            #     # 将头实体和尾实体对应的位置填充为1，表示有连接关系
+            #     relation_adj_values[head_id] = 1
+            #     relation_adj_values[tail_id] = 1
+            cf = np_mat.copy()
+            cf[:, 0] = cf[:, 0] + n_users
+            cf[:, 1] = cf[:, 1] + n_users  # [0, n_items) -> [n_users, n_users+n_items)
+            vals = [1.] * (len(cf) * 2)
+            row = np.concatenate((cf[:, 0], cf[:, 1]), axis=0)
+            col = np.zeros(len(row), dtype=np.int32)
+            adj_r = sp.coo_matrix((vals, (row, col)), shape=(n_nodes, 1))
+            # adj = sp.coo_matrix((vals, (np_mat[:, 0], np_mat[:, 1])), shape=(n_nodes, n_nodes)
+            adj = sp.hstack([adj, adj_r])
 
-    norm_mat_list = [_bi_norm_lap(mat) for mat in adj_mat_list]
-    mean_mat_list = [_si_norm_lap(mat) for mat in adj_mat_list]
+    # build relation adj matrix R
+    adj_kg_mat = adj.reshape((n_nodes, n_nodes + n_relations - 1))  # + KG relation (n_relations-1)
+    adj_kg_mat_t = adj_kg_mat.transpose()  # (n_node+n_relations-1, n_node)
+    # R^T
+    # 获取行索引大于等于n_nodes的元素对应的索引和数据值
+    relevant_indices = np.where(adj_kg_mat_t.row >= n_nodes)[0]
+    new_row_indices = adj_kg_mat_t.row[relevant_indices] - n_nodes  # 调整行索引，使其从0开始（如果需要）
+    new_col_indices = adj_kg_mat_t.col[relevant_indices]
+    new_data = adj_kg_mat_t.data[relevant_indices]
+
+    # 使用获取到的数据构建新的coo_matrix
+    adj_r_t = sp.coo_matrix((new_data, (new_row_indices, new_col_indices)), shape=(n_relations - 1, n_nodes))
+    z = sp.coo_matrix((n_relations-1, n_relations-1), dtype=np.float32)     # 边与边的连接关系：0
+    down = sp.hstack([adj_r_t, z])
+    # 把上下拼起来
+    final_mat = sp.vstack([adj_kg_mat, down]).reshape((n_nodes+n_relations-1, n_nodes+n_relations-1))
+    mean_mat = _si_norm_lap(final_mat)
+
+    # concat A and R
+    # norm_mat_list = [_bi_norm_lap(mat) for mat in adj_mat_list]
+    # mean_mat_list = [_si_norm_lap(mat) for mat in adj_mat_list]
     # interaction: user->item, [n_users, n_entities]
-    norm_mat_list[0] = norm_mat_list[0].tocsr()[:n_users, n_users:].tocoo()
-    mean_mat_list[0] = mean_mat_list[0].tocsr()[:n_users, n_users:].tocoo()
+    # norm_mat_list[0] = norm_mat_list[0].tocsr()[:n_users, n_users:].tocoo()
+    # mean_mat_list[0] = mean_mat_list[0].tocsr()[:n_users, n_users:].tocoo()
 
-    return adj_mat_list, norm_mat_list, mean_mat_list
+    # return adj_mat_list, norm_mat_list, mean_mat_list
+    return final_mat, mean_mat
 
 
 def load_data(model_args):
@@ -183,8 +214,8 @@ def load_data(model_args):
     graph, relation_dict = build_graph(train_cf, triplets)
 
     print('building the adj mat ...')
-    # adj_mat_list, norm_mat_list, mean_mat_list = build_sparse_relational_graph(relation_dict)
-    adj_mat_list = build_adj_matrix(relation_dict)
+    ckg_mat, ckg_mean_mat = build_sparse_relational_graph(relation_dict)
+    # adj_mat_list = build_adj_matrix(relation_dict)
     n_params = {
         'n_users': int(n_users),
         'n_items': int(n_items),
@@ -197,6 +228,6 @@ def load_data(model_args):
         'test_user_set': test_user_set
     }
 
-    return train_cf, test_cf, user_dict, n_params, graph, adj_mat_list
+    return train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat
     # return train_cf, test_cf, user_dict, n_params, graph, \
     #        [adj_mat_list, norm_mat_list, mean_mat_list]
