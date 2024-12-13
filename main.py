@@ -57,8 +57,8 @@ if __name__ == '__main__':
     device = torch.device("cuda:"+str(args.gpu_id)) if args.cuda else torch.device("cpu")
 
     """build dataset"""
-    train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat = load_data(args)    # 修改adj_mat为[user+item, user+item]
-    # train_cf, test_cf, user_dict, n_params, graph, mat_list = load_data(args)
+    # train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat = load_data(args)    # 修改adj_mat为[user+item, user+item]
+    train_cf, test_cf, user_dict, n_params, graph, adj_mat = load_data(args)    # without kg
     # adj_mat_list, norm_mat_list, mean_mat_list = mat_list
 
     n_users = n_params['n_users']
@@ -81,7 +81,7 @@ if __name__ == '__main__':
     test_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in test_cf], np.int32))
 
     """define model"""
-    model = MRAM(n_params, args, graph, ckg_mat).to(device)
+    model = MRAM(n_params, args, graph, adj_mat).to(device)
     # model = MRAM(n_params, args, graph, mean_mat_list[0]).to(device)
 
     """define optimizer"""

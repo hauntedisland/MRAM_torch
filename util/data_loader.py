@@ -214,8 +214,8 @@ def load_data(model_args):
     graph, relation_dict = build_graph(train_cf, triplets)
 
     print('building the adj mat ...')
-    ckg_mat, ckg_mean_mat = build_sparse_relational_graph(relation_dict)
-    # adj_mat_list = build_adj_matrix(relation_dict)
+    # ckg_mat, ckg_mean_mat = build_sparse_relational_graph(relation_dict)
+    adj_mat= build_adj_matrix(relation_dict)
     n_params = {
         'n_users': int(n_users),
         'n_items': int(n_items),
@@ -228,6 +228,5 @@ def load_data(model_args):
         'test_user_set': test_user_set
     }
 
-    return train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat
-    # return train_cf, test_cf, user_dict, n_params, graph, \
-    #        [adj_mat_list, norm_mat_list, mean_mat_list]
+    # return train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat
+    return train_cf, test_cf, user_dict, n_params, graph, adj_mat
