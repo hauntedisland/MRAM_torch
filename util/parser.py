@@ -30,6 +30,7 @@ def parse_args():
     parser.add_argument("--batch_test_flag", type=bool, default=True, help="use gpu or not")
     # parser.add_argument("--channel", type=int, default=32, help="hidden channels for model")    # 和embedding size什么区别？
     parser.add_argument("--encode_layer", type=int, default=2, help="layer for GNN encoder")
+    parser.add_argument("--decode_layer", type=int, default=2, help="layer for disentangle module")
     parser.add_argument("--cuda", type=bool, default=True, help="use gpu or not")
     parser.add_argument("--gpu_id", type=int, default=0, help="gpu id")
     parser.add_argument('--Ks', nargs='?', default='[20]', help='Output sizes of every layer') # change
