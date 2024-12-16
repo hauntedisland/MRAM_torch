@@ -71,13 +71,13 @@ def read_triplets(file_name):
     n_nodes = n_entities + n_users
     n_relations = max(triplets[:, 1]) + 1
 
-    return triplets
+    return triplets     # np.array
 
 
 def build_graph(train_data, triplets):
     ckg_graph = nx.MultiDiGraph()
     rd = defaultdict(list)
-
+    hd = defaultdict(list)
     print("Begin to load interaction triples ...")
     for u_id, i_id in tqdm(train_data, ascii=True):
         rd[0].append([u_id, i_id])
@@ -86,8 +86,9 @@ def build_graph(train_data, triplets):
     for h_id, r_id, t_id in tqdm(triplets, ascii=True):
         ckg_graph.add_edge(h_id, t_id, key=r_id)
         rd[r_id].append([h_id, t_id])
+        hd[h_id].append([t_id, r_id])
 
-    return ckg_graph, rd
+    return ckg_graph, rd, hd
 
 
 def build_adj_matrix(relation_dict):
@@ -211,11 +212,11 @@ def load_data(model_args):
     triplets = read_triplets(directory + 'kg.txt')
 
     print('building the graph ...')
-    graph, relation_dict = build_graph(train_cf, triplets)
+    graph, relation_dict, kg_dict = build_graph(train_cf, triplets)
 
     print('building the adj mat ...')
     # ckg_mat, ckg_mean_mat = build_sparse_relational_graph(relation_dict)
-    adj_mat= build_adj_matrix(relation_dict)
+    adj_mat = build_adj_matrix(relation_dict)
     n_params = {
         'n_users': int(n_users),
         'n_items': int(n_items),
@@ -229,4 +230,4 @@ def load_data(model_args):
     }
 
     # return train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat
-    return train_cf, test_cf, user_dict, n_params, graph, adj_mat
+    return train_cf, test_cf, user_dict, kg_dict, triplets, n_params, graph, adj_mat

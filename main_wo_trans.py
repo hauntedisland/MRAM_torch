@@ -1,4 +1,3 @@
-import logging
 import random
 import sys
 from enum import Enum
@@ -15,14 +14,37 @@ from model_torch import MRAM
 from util.evaluate import test
 from util.helper import early_stopping
 
-import kg_data_loader as kg_loader
-
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 n_users = 0
 n_items = 0
 n_entities = 0
 n_nodes = 0
 n_relations = 0
+
+
+class Procedure(Enum):
+    Train_Trans = 1
+    Train_Rec = 2
+    Test = 3
+
+
+def get_feed_kg_dict(triplets, start, end):
+    batch_triplets = triplets[start:end]
+
+    batch_heads = torch.LongTensor(batch_triplets[:, 0])
+    batch_relations = torch.LongTensor(batch_triplets[:, 1])
+    batch_pos_tails = torch.LongTensor(batch_triplets[:, 2])
+    # TODO: neg sampling how?
+    feed_dict = {
+        'heads': batch_heads,
+        'relations': batch_relations,
+        'pos_tails': batch_pos_tails,
+        'neg_tails': batch_neg_tails
+    }
+    return feed_dict
+
 
 def get_feed_dict(train_entity_pairs, start, end, train_user_set):
     def negative_sampling(user_item, train_user_set):
@@ -63,6 +85,7 @@ if __name__ == '__main__':
     """build dataset"""
     # train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat = load_data(args)    # 修改adj_mat为[user+item, user+item]
     train_cf, test_cf, user_dict, kg_dict, kg_triplet, n_params, graph, adj_mat = load_data(args)  # without kg
+    # adj_mat_list, norm_mat_list, mean_mat_list = mat_list
 
     n_users = n_params['n_users']
     n_items = n_params['n_items']
@@ -88,6 +111,7 @@ if __name__ == '__main__':
 
     """define model"""
     model = MRAM(n_params, args, graph, adj_mat).to(device)
+    # model = MRAM(n_params, args, graph, mean_mat_list[0]).to(device)
 
     """define optimizer"""
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -96,78 +120,40 @@ if __name__ == '__main__':
     stopping_step = 0
     should_stop = False
 
-    print("... start training ...")
-    """training KG"""
+    print("start training TransE ...")
     for epoch in range(args.kg_epoch):
-        trans_s_t = time()
-        kg_loss = 0
-        n_kg_batch = len(kg_triplet) // args.kg_batch_size + 1
-        for iter in range(1, n_kg_batch + 1):
-            kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = kg_loader.generate_kg_batch(
-                kg_dict, args.kg_batch_size, n_entities)
-            kg_batch_head = kg_batch_head.to(device)
-            kg_batch_relation = kg_batch_relation.to(device)
-            kg_batch_pos_tail = kg_batch_pos_tail.to(device)
-            kg_batch_neg_tail = kg_batch_neg_tail.to(device)  # index error？
-
-            kg_batch_loss = model.calculate_loss_transE(kg_batch_head, kg_batch_relation, kg_batch_pos_tail,
-                                                        kg_batch_neg_tail)
-
-            if np.isnan(kg_batch_loss.cpu().detach().numpy()):
-                logging.info(
-                    'ERROR (KG Training): Epoch {:04d} Iter {:04d} / {:04d} Loss is nan.'.format(epoch, iter, n_kg_batch))
-                sys.exit()
-
-            kg_batch_loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-            kg_loss += kg_batch_loss
-
-        trans_e_t = time()
-        if epoch % 3 == 2 or epoch == 0:
-            kg_res = PrettyTable()
-            kg_res.field_names = ["Epoch", "training time", "Loss"]
-            kg_res.add_row([epoch, trans_e_t - trans_s_t, kg_loss.item()])
-            print(kg_res)
-
-    for epoch in range(args.epoch):
-        model.train()
-
-        # """training KG"""
-        # trans_s_t = time()
-        # kg_loss = 0
-        # n_kg_batch = len(kg_triplet) // args.kg_batch_size + 1
-        # for iter in range(1, n_kg_batch + 1):
-        #     kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = kg_loader.generate_kg_batch(
-        #         kg_dict, args.kg_batch_size, n_entities)
-        #     kg_batch_head = kg_batch_head.to(device)
-        #     kg_batch_relation = kg_batch_relation.to(device)
-        #     kg_batch_pos_tail = kg_batch_pos_tail.to(device)
-        #     kg_batch_neg_tail = kg_batch_neg_tail.to(device)    # index error？
-        #
-        #     kg_batch_loss = model.calculate_loss_transE(kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail)
-        #
-        #     if np.isnan(kg_batch_loss.cpu().detach().numpy()):
-        #         logging.info('ERROR (KG Training): Epoch {:04d} Iter {:04d} / {:04d} Loss is nan.'.format(epoch, iter, n_kg_batch))
-        #         sys.exit()
-        #
-        #     kg_batch_loss.backward()
-        #     optimizer.step()
-        #     optimizer.zero_grad()
-        #     kg_loss += kg_batch_loss
-        #
-        # trans_e_t = time()
-        # kg_res = PrettyTable()
-        # kg_res.field_names = ["Epoch", "training time", "Loss"]
-        # kg_res.add_row([epoch, trans_e_t - trans_s_t, kg_loss.item()])
-        # print(kg_res)
-
-        """training CF"""
         index = np.arange(len(train_cf))
         np.random.shuffle(index)
         train_cf_pairs = train_cf_pairs[index]
 
-        loss, s = 0, 0
+        model.train()
+        KGLoader = DataLoader(self.rec_model.kg_dataset, batch_size=4096, drop_last=False)
+        trans_loss = 0.
+
+    with tqdm(KGLoader, file=sys.stdout, total=len(KGLoader),
+              desc='Trans Epoch ' + str(world.sys_epoch).zfill(3), disable=False) as t:
+        for data in t:
+            heads = data[0].to(device)
+            relations = data[1].to(device)
+            pos_tails = data[2].to(device)
+            neg_tails = data[3].to(device)
+            kg_loss = model.calculate_loss_transE(heads, relations, pos_tails, neg_tails)
+            optimizer.zero_grad()
+            kg_loss.backward()
+            optimizer.step()
+
+            trans_loss += kg_loss
+        t.close()
+
+    print("start training CF ...")
+    for epoch in range(args.epoch):
+        """training CF"""
+        # shuffle training data
+        index = np.arange(len(train_cf))
+        np.random.shuffle(index)
+        train_cf_pairs = train_cf_pairs[index]
+
+        loss, s, cor_loss = 0, 0, 0
         train_s_t = time()
         while s + args.batch_size <= len(train_cf):
             """model training"""

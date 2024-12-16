@@ -7,83 +7,80 @@ from torch_scatter import scatter_sum, scatter_softmax
 
 init = nn.init.xavier_uniform_
 
+# class RGAT(nn.Module):
+#     def __init__(self, latdim, n_hops, mess_dropout_rate, n_item, n_relation):
+#         super(RGAT, self).__init__()
+#         self.mess_dropout_rate = mess_dropout_rate
+#         self.W = nn.Parameter(init(torch.empty(size=(2 * latdim, latdim)), gain=nn.init.calculate_gain('relu')))
+#
+#         self.leakyrelu = nn.LeakyReLU(0.2)
+#         self.n_hops = n_hops
+#         self.dropout = nn.Dropout(p=mess_dropout_rate)
+#         self.n_item = n_item
+#
+#         # projection from item space to relation space(?)
+#         self.W2 = nn.Parameter(init(torch.empty(size=(64, 64)), gain=nn.init.calculate_gain('relu')))
+#
+#     def agg(self, entity_emb, relation_emb, kg):
+#         edge_index, edge_type = kg
+#         head, tail = edge_index
+#         a_input = torch.cat([entity_emb[head], entity_emb[tail]], dim=-1)
+#         # 将entity通过W矩阵映射到relation emb上. [head+tail, d] * [relation, d]
+#         e_input = torch.multiply(torch.mm(a_input, self.W), relation_emb[edge_type - 1]).sum(
+#             -1)
+#         e = self.leakyrelu(e_input)
+#         # 将head位置的向量(item)都转换为概率分布
+#         e = scatter_softmax(e, head, dim=0, dim_size=entity_emb.shape[0])
+#         # 按概率聚合连接的entity，更新item. e本身就是一种概率分数，使用view(-1,1)
+#         agg_emb = entity_emb[tail] * e.view(-1, 1)
+#         # 将与每个head索引相关的所有tail索引对应的加权实体嵌入向量求和。
+#         agg_emb = scatter_sum(agg_emb, head, dim=0, dim_size=entity_emb.shape[0])
+#         # 1.计算relation -> item attention (学习一个映射矩阵)
+#         # transformed_agg = torch.mm(agg_emb[:self.n_item, :], self.W2)   # 线性变换
+#         # ir_att = F.softmax(torch.matmul(transformed_agg, relation_emb.t()), dim=1)     # attention on relation_dim. [item, relation]
+#         # KGIN
+#         score = F.softmax(torch.mm(relation_emb, agg_emb.t()), dim=1)  # (relation, item)
+#         r_emb = torch.matmul(score, agg_emb)
+#         # 2.用注意力更新relation
+#         # r_emb = torch.matmul(ir_att, relation_emb)  # shape error.ir_att shape, how to multiply?
+#         # agg_emb = agg_emb + entity_emb
+#         return agg_emb, r_emb
+#
+#     # TODO: 实现更新relation emb
+#     def forward(self, entity_emb, relation_emb, kg, res_lambda, mess_dropout=True):
+#         entity_res_emb = entity_emb
+#         for _ in range(self.n_hops):
+#             entity_emb, r_emb = self.agg(entity_emb, relation_emb, kg)
+#             if mess_dropout:
+#                 entity_emb = self.dropout(entity_emb)
+#             entity_emb = F.normalize(entity_emb)
+#
+#             entity_res_emb = res_lambda * entity_res_emb + entity_emb
+#         return entity_res_emb, r_emb
 
-class RGAT(nn.Module):
-    def __init__(self, latdim, n_hops, mess_dropout_rate, n_item, n_relation):
-        super(RGAT, self).__init__()
-        self.mess_dropout_rate = mess_dropout_rate
-        self.W = nn.Parameter(init(torch.empty(size=(2 * latdim, latdim)), gain=nn.init.calculate_gain('relu')))
 
-        self.leakyrelu = nn.LeakyReLU(0.2)
-        self.n_hops = n_hops
-        self.dropout = nn.Dropout(p=mess_dropout_rate)
-        self.n_item = n_item
-
-        # projection from item space to relation space(?)
-        self.W2 = nn.Parameter(init(torch.empty(size=(64, 64)), gain=nn.init.calculate_gain('relu')))
-
-    def agg(self, entity_emb, relation_emb, kg):
-        edge_index, edge_type = kg
-        head, tail = edge_index
-        a_input = torch.cat([entity_emb[head], entity_emb[tail]], dim=-1)
-        # 将entity通过W矩阵映射到relation emb上. [head+tail, d] * [relation, d]
-        e_input = torch.multiply(torch.mm(a_input, self.W), relation_emb[edge_type - 1]).sum(
-            -1)
-        e = self.leakyrelu(e_input)
-        # 将head位置的向量(item)都转换为概率分布
-        e = scatter_softmax(e, head, dim=0, dim_size=entity_emb.shape[0])
-        # 按概率聚合连接的entity，更新item. e本身就是一种概率分数，使用view(-1,1)
-        agg_emb = entity_emb[tail] * e.view(-1, 1)
-        # 将与每个head索引相关的所有tail索引对应的加权实体嵌入向量求和。
-        agg_emb = scatter_sum(agg_emb, head, dim=0, dim_size=entity_emb.shape[0])
-        # 1.计算relation -> item attention (学习一个映射矩阵)
-        # transformed_agg = torch.mm(agg_emb[:self.n_item, :], self.W2)   # 线性变换
-        # ir_att = F.softmax(torch.matmul(transformed_agg, relation_emb.t()), dim=1)     # attention on relation_dim. [item, relation]
-        # 偷KGIN
-        score = F.softmax(torch.mm(relation_emb, agg_emb.t()), dim=1)   # (relation, item)
-        r_emb = torch.matmul(score, agg_emb)
-        # 2.用注意力更新relation
-        # r_emb = torch.matmul(ir_att, relation_emb)  # shape error.ir_att shape, how to multiply?
-        # agg_emb = agg_emb + entity_emb
-        return agg_emb, r_emb
-
-    # TODO: 实现更新relation emb
-    def forward(self, entity_emb, relation_emb, kg, res_lambda, mess_dropout=True):
-        entity_res_emb = entity_emb
-        for _ in range(self.n_hops):
-            entity_emb, r_emb = self.agg(entity_emb, relation_emb, kg)
-            if mess_dropout:
-                entity_emb = self.dropout(entity_emb)
-            entity_emb = F.normalize(entity_emb)
-
-            entity_res_emb = res_lambda * entity_res_emb + entity_emb
-        return entity_res_emb, r_emb
+"""
+    pass transE updated item embedding
+    LightGCN[user || item embedding]
+    return user, item embedding
+"""
 
 
-# RGAT更新item embedding, relation embedding
-# 将user, item embedding concat, 使用LightGCN更新
-# 返回：user, item, relation embedding
 class GraphConv(nn.Module):
-    def __init__(self, all_emb, relation_emb, adj_mat, conv_layers, n_users, n_items, n_relations, kg_hop, dim,
-                 mess_dropout_rate):
+    def __init__(self, user_emb, adj_mat, conv_layers, n_users, n_items, n_relations):
         super(GraphConv, self).__init__()
-        self.ckg_emb = all_emb  # [entity, channel]
-        self.relation_emb = relation_emb
+        self.user_emb = user_emb  # [entity, channel]
         self.adj_mat = adj_mat  # [entity+n_relation-1, entity+n_relation-1]
         self.convs = conv_layers  # encode layer
         self.n_users = n_users
         self.n_items = n_items
         self.n_relation = n_relations - 1
-        self.mess_dropout_rate = mess_dropout_rate
-        # self.rgat = RGAT(dim, kg_hop, self.mess_dropout_rate, self.n_items, self.n_relation)
-        self.trans =
-    def forward(self, kg, res, mess_dropout=True):
-        user_emb = self.ckg_emb[:self.n_users, :]
-        entity_emb = self.ckg_emb[self.n_users:, :]
-        # change to Trans
-        entity_kg_emb, r_emb = self.rgat.forward(entity_emb, self.relation_emb, kg, res, mess_dropout)
+
+    def forward(self, entity_kg_emb):  # entity kg embedding from TransE
+        user_emb = self.user_emb
+        item_emb = entity_kg_emb[:self.n_items, :]
         # concat user emb and updated item emb
-        all_emb = torch.cat([user_emb, entity_kg_emb[:self.n_items, :]], dim=0)
+        all_emb = torch.cat([user_emb, item_emb], dim=0)
         embs = [all_emb]
         temp_emb = all_emb
         # GCN
@@ -93,13 +90,8 @@ class GraphConv(nn.Module):
 
         embs = torch.stack(embs, dim=1)
         light_out = torch.mean(embs, dim=1)
-
-        # user_emb = light_out[:self.n_users, :]
-        # item_emb = light_out[self.n_users:self.n_users + self.n_items, :]
-        #
-        # relation_emb = light_out[self.n_users + self.n_items:self.n_users + self.n_items + self.n_relation, :]
-        return light_out[:self.n_users], light_out[self.n_users:], r_emb
-
+        # return light_out[:self.n_users], light_out[self.n_users:]
+        return light_out[:self.n_users]
 
 class Disentangle(nn.Module):
     def __init__(self, channel, n_users, n_items, n_intent, n_relation):
@@ -107,28 +99,26 @@ class Disentangle(nn.Module):
         self.n_users = n_users
         self.n_items = n_items
         self.n_intent = n_intent
-        self.n_relation = n_relation - 1
+        self.n_relation = n_relation
         self.emb_size = channel
         # 将relation解耦和intent解耦矩阵设置为可学习的
-        weight = init(torch.empty(self.n_intent, self.n_relation))  # not include interact
-        self.weight = nn.Parameter(weight)  # [n_relations - 1, in_channel]
+        weight = init(torch.empty(self.n_intent, self.n_relation))
+        self.weight = nn.Parameter(weight)
 
-    def forward(self, user_emb, item_emb, relation_emb):
-        # [n_intent, n_relation] * [n_relation, dim] = [n_intent, dim]
+    def forward(self, user_emb, entity_emb, r_kg_emb):  # relation embedding from transE
+        relation_emb = r_kg_emb
+        item_emb1 = entity_emb[:self.n_items, :]       # 从trans的entity embedding拿来item embedding直接用
         # TODO: 目前给所有user的weight都是一样的，没有personalized
         disen_weight = torch.mm(nn.Softmax(dim=-1)(self.weight), relation_emb).unsqueeze(0).expand(
             self.n_users, -1, -1)
         disen_weight1 = torch.mm(nn.Softmax(dim=-1)(self.weight), relation_emb).unsqueeze(0).expand(
             self.n_items, -1, -1)
         user_emb1 = user_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
-        item_emb1 = item_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
+        item_emb1 = item_emb1.unsqueeze(1).expand(-1, self.n_intent, -1)
         # concat user, item embedding to n_intent*dim
         user_int_emb = (user_emb1 * disen_weight).reshape(self.n_users, self.n_intent * self.emb_size)
-        # item_int_emb = torch.cat([item_emb for _ in range(self.n_intent)], dim=1)   # TODO
         item_int_emb = (item_emb1 * disen_weight1).reshape(self.n_items, self.n_intent * self.emb_size)
-        # mean:
-        # user_int_emb = torch.mean(user_int_emb, dim=1)
-        # item_int_emb = item_emb
+
         assert user_int_emb.shape == (self.n_users, self.emb_size * self.n_intent)
         assert item_int_emb.shape == (self.n_items, self.emb_size * self.n_intent)
         return user_int_emb, item_int_emb
@@ -146,12 +136,13 @@ class MRAM(nn.Module):
         self.n_users = data_config['n_users']
         self.n_items = data_config['n_items']
         self.n_relations = data_config['n_relations']
-        self.n_entities = data_config['n_entities']  # include items!
+        self.n_entities = data_config['n_entities']  # include items
         self.n_nodes = data_config['n_nodes']  # entity + user
 
         self.n_intent = args_config.n_intent
         self.emb_size = args_config.dim
-        self.encode_layer = args_config.encode_layer  # encoder layer
+        self.kg_emb_size = args_config.kg_dim
+        self.encode_layer = args_config.encode_layer
         self.device = torch.device("cuda:" + str(args_config.gpu_id)) if args_config.cuda \
             else torch.device("cpu")
 
@@ -160,26 +151,18 @@ class MRAM(nn.Module):
         self.edge_index, self.edge_type = self._get_edges(graph)
         self.kg_hop = args_config.layer_num_kg
 
-        self._init_weight()
-        self.all_embed = nn.Parameter(self.all_embed)
-        self.relation_emb = nn.Parameter(self.relation_emb)
-        # self.intent_emb = nn.Parameter(self.intent_emb)
-        # CKG encoder
-        self.encoder = GraphConv(self.all_embed, self.relation_emb, self.ckg_mat, self.encode_layer, self.n_users,
-                                 self.n_items, self.n_relations, self.kg_hop, self.emb_size, self.mess_drop_rate)
+        self.user_embed = torch.nn.Embedding(self.n_users, self.emb_size)
+        self.entity_embed = torch.nn.Embedding(self.n_entities, self.emb_size)
+        self.relation_emb = torch.nn.Embedding(self.n_relations, self.emb_size)
+        self.trans_w = torch.nn.Embedding(self.n_relations, self.emb_size * self.kg_emb_size)
+
+        self.ckg_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat).to(self.device)
+
+        self.encoder = GraphConv(self.user_embed.weight, self.ckg_mat, self.encode_layer, self.n_users,
+                                 self.n_items, self.n_relations)
         self.decoder = Disentangle(self.emb_size, self.n_users, self.n_items, self.n_intent, self.n_relations)
         # self.decoder = Disentangle(self.cf_mat, self.emb_size, self.decode_layer, self.n_users, self.n_items,
         #                            self.n_intent, self.n_relations)
-
-    def _init_weight(self):
-        self.all_embed = init(torch.empty(self.n_nodes, self.emb_size))
-        # self.all_embed = initializer(torch.empty(self.n_users + self.n_items, self.emb_size))
-        self.relation_emb = init(torch.empty(self.n_relations - 1, self.emb_size))
-        # self.intent_emb = initializer(torch.empty(self.n_intent, self.emb_size))  # intent embedding
-
-        # [n_users+n_entities, n_users+n_entities]
-        self.ckg_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat).to(self.device)
-        # self.cf_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat_cf).to(self.device)
 
     def _get_edges(self, graph):  # graph:[num_nodes, [h, t, r_id]]
         graph_tensor = torch.tensor(list(graph.edges))  # [-1, 3]
@@ -194,9 +177,23 @@ class MRAM(nn.Module):
         return torch.sparse.FloatTensor(i, v, coo.shape)
 
     def _calculate_embedding(self):
-        user_emb, item_emb, relation_emb = self.encoder([self.edge_index, self.edge_type], self.res)
-        user_int_emb, item_int_emb = self.decoder(user_emb, item_emb, relation_emb)
+        user_emb = self.encoder(self.entity_embed.weight)     # TODO: 传入训练来的trans embedding
+        # user_int_emb, item_int_emb = self.decoder(user_emb, item_emb, self.relation_emb.weight)
+        user_int_emb, item_int_emb = self.decoder(user_emb, self.entity_embed.weight, self.relation_emb.weight)
         return user_int_emb, item_int_emb
+
+    def _get_kg_embedding(self, h, r, pos_t, neg_t):  # rectorch
+        h_e = self.entity_embed(h).unsqueeze(1)  # (kg_batch_size, 1, relation_dim)
+        pos_t_e = self.entity_embed(pos_t).unsqueeze(1)
+        neg_t_e = self.entity_embed(neg_t).unsqueeze(1)
+        r_e = self.relation_emb(r)
+        r_trans_w = self.trans_w(r).view(r.size(0), self.emb_size, self.kg_emb_size)  # (kg_batch_size, embed_dim, kg_dim)
+
+        h_e = torch.bmm(h_e, r_trans_w).squeeze(1)
+        pos_t_e = torch.bmm(pos_t_e, r_trans_w).squeeze(1)
+        neg_t_e = torch.bmm(neg_t_e, r_trans_w).squeeze(1)
+
+        return h_e, r_e, pos_t_e, neg_t_e
 
     def forward(self, batch=None):
         user = batch['users']
@@ -208,6 +205,7 @@ class MRAM(nn.Module):
         pos_e, neg_e = item_int_emb[pos_item], item_int_emb[neg_item]
         # ssm_loss = self.ssm_loss(u_e, pos_e)
         mf_loss = self.create_bpr_loss(u_e, pos_e, neg_e)
+
         return mf_loss
         # return ssm_loss + mf_loss
 
@@ -239,6 +237,15 @@ class MRAM(nn.Module):
         ssm_loss = (-1) * torch.log(pos_score / neg_score)
         ssm_loss = torch.mean(ssm_loss)
         return self.ssm * ssm_loss
+
+    def calculate_loss_transE(self, h, r, pos_t, neg_t):
+        h_e, r_e, pos_t_e, neg_t_e = self._get_kg_embedding(h, r, pos_t, neg_t)
+        pos_tail_score = ((h_e + r_e - pos_t_e) ** 2).sum(dim=1)
+        neg_tail_score = ((h_e + r_e - neg_t_e) ** 2).sum(dim=1)
+        kg_loss = torch.nn.functional.softplus(pos_tail_score - neg_tail_score).mean()
+        # kg_reg_loss = self.reg_loss(h_e, r_e, pos_t_e, neg_t_e)
+        loss = kg_loss
+        return loss
 
     def generate(self):
         return self._calculate_embedding()
