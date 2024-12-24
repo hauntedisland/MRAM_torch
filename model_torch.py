@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_scatter import scatter_sum, scatter_softmax
+# import util.losses
 
 init = nn.init.xavier_uniform_
 
@@ -90,8 +90,9 @@ class GraphConv(nn.Module):
 
         embs = torch.stack(embs, dim=1)
         light_out = torch.mean(embs, dim=1)
-        # return light_out[:self.n_users], light_out[self.n_users:]
-        return light_out[:self.n_users]
+
+        return light_out[:self.n_users], light_out[self.n_users:]
+        # return light_out[:self.n_users]
 
 
 class Disentangle(nn.Module):
@@ -104,8 +105,9 @@ class Disentangle(nn.Module):
         self.n_relation = n_relation
         self.emb_size = channel
         self.convs = layer
+        self.net = nn.Sequential(nn.Linear())
         # 将relation解耦和intent解耦矩阵设置为可学习的
-        weight = init(torch.empty(self.n_intent, self.n_relation))
+        weight = init(torch.empty(self.n_intent, self.n_relation))      # xavier initialization
         self.weight = nn.Parameter(weight)
 
     def cal_edge(self, tensor):
@@ -157,41 +159,46 @@ class Disentangle(nn.Module):
     #     assert item_int_emb.shape == (self.n_items, self.emb_size * self.n_intent)
     #     return user_int_emb, item_int_emb
 
-    def forward(self, user_emb, entity_emb, r_kg_emb):  # relation embedding from transE
-        relation_emb = r_kg_emb
-        item_emb1 = entity_emb[:self.n_items, :]  # 从trans的entity embedding拿来item embedding直接用
-        # TODO: 目前给所有user的weight都是一样的，没有personalized
+    def forward(self, user_emb, item_emb, r_kg_emb):  # relation embedding from transE
+        # ui_emb = all_emb[:self.n_users + self.n_items, :]
         # disen_weight = torch.mm(nn.Softmax(dim=-1)(self.weight), relation_emb).unsqueeze(0).expand(
-        #     self.n_users, -1, -1)
-        # disen_weight1 = torch.mm(nn.Softmax(dim=-1)(self.weight), relation_emb).unsqueeze(0).expand(
-        #     self.n_items, -1, -1)
-        # user_emb1 = user_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
-        # item_emb1 = item_emb1.unsqueeze(1).expand(-1, self.n_intent, -1)
-        # # concat user, item embedding to n_intent*dim
-        # user_int_emb = (user_emb1 * disen_weight).reshape(self.n_users, self.n_intent * self.emb_size)
-        # item_int_emb = (item_emb1 * disen_weight1).reshape(self.n_items, self.n_intent * self.emb_size)
+        #     self.n_users+self.n_items, -1, -1)
+        # ui_emb = ui_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
+        # ui_int_emb = (ui_emb * disen_weight).reshape(-1, self.n_intent * self.emb_size)
+
+        disen_weight = torch.mm(nn.Softmax(dim=-1)(self.weight), r_kg_emb).unsqueeze(0).expand(
+            self.n_users, -1, -1)
+        disen_weight1 = torch.mm(nn.Softmax(dim=-1)(self.weight), r_kg_emb).unsqueeze(0).expand(
+            self.n_items, -1, -1)
+        user_emb1 = user_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
+        item_emb = item_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
+        # concat user, item embedding to n_intent*dim
+        user_int_emb = (user_emb1 * disen_weight).reshape(self.n_users, self.n_intent * self.emb_size)
+        item_int_emb = (item_emb * disen_weight1).reshape(self.n_items, self.n_intent * self.emb_size)
 
         # method2: use subgraph adjacent matrix
-        all_emb = torch.cat((user_emb, item_emb1), dim=0).unsqueeze(1).expand(-1, self.n_intent,
-                                                                              -1)  # shape: [n_node, n_intent, dim]
-        disen_weight = torch.mm(nn.Softmax(dim=-1)(self.weight), relation_emb).unsqueeze(0).expand(
-                self.n_users+self.n_items, -1, -1)   # shape: [n_node, n_intent, dim]
-        # disentangle
-        all_int_emb = all_emb * disen_weight
-        user_int_list, item_int_list = [], []
-        # for each intent, build subgraph
-        for i in range(self.n_intent):
-            all_e = all_int_emb[:, i, :].squeeze(1)  # shape:[n_node, dim]
-            # calculate node similarity to decide build edge or not, create mask matrix
-            int_adj = self.cal_edge(all_e)
-            # subgraph GNN
-            user_int, item_int = self.GNN(all_e, int_adj)
-            user_int_list.append(user_int)
-            item_int_list.append(item_int)
-        # concat intent embeddings, return final result
-        user_int_emb = torch.cat(user_int_list, dim=1)
-        item_int_emb = torch.cat(item_int_list, dim=1)
+        # all_emb = torch.cat((user_emb, item_emb1), dim=0).unsqueeze(1).expand(-1, self.n_intent,
+        #                                                                       -1)  # shape: [n_node, n_intent, dim]
+        # disen_weight = torch.mm(nn.Softmax(dim=-1)(self.weight), relation_emb).unsqueeze(0).expand(
+        #         self.n_users+self.n_items, -1, -1)   # shape: [n_node, n_intent, dim]
+        # # disentangle
+        # all_int_emb = all_emb * disen_weight
+        # user_int_list, item_int_list = [], []
+        # # for each intent, build subgraph
+        # for i in range(self.n_intent):
+        #     all_e = all_int_emb[:, i, :].squeeze(1)  # shape:[n_node, dim]
+        #     # calculate node similarity to decide build edge or not, create mask matrix
+        #     int_adj = self.cal_edge(all_e)
+        #     # subgraph GNN
+        #     user_int, item_int = self.GNN(all_e, int_adj)
+        #     user_int_list.append(user_int)
+        #     item_int_list.append(item_int)
+        # # concat intent embeddings, return final result
+        # user_int_emb = torch.cat(user_int_list, dim=1)
+        # item_int_emb = torch.cat(item_int_list, dim=1)
 
+        # user_int_emb = ui_int_emb[:self.n_users, :]
+        # item_int_emb = ui_int_emb[self.n_users:, :]
         assert user_int_emb.shape == (self.n_users, self.emb_size * self.n_intent)
         assert item_int_emb.shape == (self.n_items, self.emb_size * self.n_intent)
         return user_int_emb, item_int_emb
@@ -209,8 +216,8 @@ class MRAM(nn.Module):
         self.n_users = data_config['n_users']
         self.n_items = data_config['n_items']
         self.n_relations = data_config['n_relations']
-        self.n_entities = data_config['n_entities']  # include items
-        self.n_nodes = data_config['n_nodes']  # entity + user
+        self.n_entities = data_config['n_entities']
+        self.n_nodes = data_config['n_nodes']  # all nodes
 
         self.n_intent = args_config.n_intent
         self.emb_size = args_config.dim
@@ -224,7 +231,7 @@ class MRAM(nn.Module):
         self.graph = graph  # KG
         self.edge_index, self.edge_type = self._get_edges(graph)
         # self.kg_hop = args_config.layer_num_kg
-
+        # self.all_embed = torch.nn.Embedding(self.n_nodes, self.emb_size)
         self.user_embed = torch.nn.Embedding(self.n_users, self.emb_size)
         self.entity_embed = torch.nn.Embedding(self.n_entities, self.emb_size)
         self.relation_emb = torch.nn.Embedding(self.n_relations, self.emb_size)
@@ -237,6 +244,8 @@ class MRAM(nn.Module):
         self.decoder = Disentangle(self.emb_size, self.n_users, self.n_items, self.n_intent, self.n_relations, self.decode_layer)
         # self.decoder = Disentangle(self.cf_mat, self.emb_size, self.decode_layer, self.n_users, self.n_items,
         #                            self.n_intent, self.n_relations)
+
+        # self.reg_loss = EmbLoss()
 
     def _get_edges(self, graph):  # graph:[num_nodes, [h, t, r_id]]
         graph_tensor = torch.tensor(list(graph.edges))  # [-1, 3]
@@ -251,15 +260,18 @@ class MRAM(nn.Module):
         return torch.sparse.FloatTensor(i, v, coo.shape)
 
     def _calculate_embedding(self):
-        user_emb = self.encoder(self.entity_embed.weight)  # TODO: 传入训练来的trans embedding
-        # user_int_emb, item_int_emb = self.decoder(user_emb, item_emb, self.relation_emb.weight)
-        user_int_emb, item_int_emb = self.decoder(user_emb, self.entity_embed.weight, self.relation_emb.weight)
+        user_emb, item_emb = self.encoder(self.entity_embed.weight)  # 传入训练来的trans embedding
+        user_int_emb, item_int_emb = self.decoder(user_emb, item_emb, self.relation_emb.weight)
+        # user_int_emb, item_int_emb = self.decoder(self.all_embed.weight, self.relation_emb.weight)
         return user_int_emb, item_int_emb
 
     def _get_kg_embedding(self, h, r, pos_t, neg_t):  # rectorch
         h_e = self.entity_embed(h).unsqueeze(1)  # (kg_batch_size, 1, relation_dim)
         pos_t_e = self.entity_embed(pos_t).unsqueeze(1)
         neg_t_e = self.entity_embed(neg_t).unsqueeze(1)
+        # h_e = self.all_embed(h).unsqueeze(1) # (kg_batch_size, 1, relation_dim)
+        # pos_t_e = self.all_embed(pos_t).unsqueeze(1)
+        # neg_t_e = self.all_embed(neg_t).unsqueeze(1)
         r_e = self.relation_emb(r)
         r_trans_w = self.trans_w(r).view(r.size(0), self.emb_size,
                                          self.kg_emb_size)  # (kg_batch_size, embed_dim, kg_dim)
@@ -291,27 +303,12 @@ class MRAM(nn.Module):
 
         mf_loss = -1 * torch.mean(nn.LogSigmoid()(pos_scores - neg_scores))
         # L2
-        # regularizer = (torch.norm(users) ** 2
-        #                + torch.norm(pos_items) ** 2
-        #                + torch.norm(neg_items) ** 2) / 2
-        # emb_loss = self.decay * regularizer / batch_size
-        return mf_loss
-        # return mf_loss + emb_loss
-
-    # TODO: 改成分母是全局的LOSS
-    def ssm_loss(self, users, pos_items):
-        pos_user_norm = F.normalize(users)
-        pos_item_norm = F.normalize(pos_items)
-
-        pos_score = torch.sum(pos_user_norm * pos_item_norm, dim=1)
-        neg_score = torch.matmul(pos_user_norm, pos_item_norm.t())
-
-        pos_score = torch.exp(pos_score / 0.2)
-        neg_score = torch.sum(torch.exp(neg_score / 0.2), dim=1)
-
-        ssm_loss = (-1) * torch.log(pos_score / neg_score)
-        ssm_loss = torch.mean(ssm_loss)
-        return self.ssm * ssm_loss
+        regularizer = (torch.norm(users) ** 2
+                       + torch.norm(pos_items) ** 2
+                       + torch.norm(neg_items) ** 2) / 2
+        emb_loss = self.decay * regularizer / batch_size
+        # return mf_loss
+        return mf_loss + emb_loss
 
     def calculate_loss_transE(self, h, r, pos_t, neg_t):
         h_e, r_e, pos_t_e, neg_t_e = self._get_kg_embedding(h, r, pos_t, neg_t)

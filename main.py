@@ -1,7 +1,7 @@
 import logging
 import random
 import sys
-from enum import Enum
+
 
 import torch
 import numpy as np
@@ -74,8 +74,8 @@ if __name__ == '__main__':
     print(f"用户数量: {n_users}")
     print(f"物品数量: {n_items}")
     print(f"实体数量: {n_entities}")
+    print(f"节点数量: {n_nodes}")
     print(f"关系数量: {n_relations}")
-    print(f"节点总数: {n_nodes}")
     print(f"训练集大小: {len(train_cf)}")
     print(f"测试集大小: {len(test_cf)}")
 
@@ -103,12 +103,15 @@ if __name__ == '__main__':
         kg_loss = 0
         n_kg_batch = len(kg_triplet) // args.kg_batch_size + 1
         for iter in range(1, n_kg_batch + 1):
+            # kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = kg_loader.generate_kg_batch(
+            #     ckg_dict, args.kg_batch_size, n_nodes)
             kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = kg_loader.generate_kg_batch(
                 kg_dict, args.kg_batch_size, n_entities)
             kg_batch_head = kg_batch_head.to(device)
+            # kg_batch_head_check = kg_batch_head.tolist()
             kg_batch_relation = kg_batch_relation.to(device)
             kg_batch_pos_tail = kg_batch_pos_tail.to(device)
-            kg_batch_neg_tail = kg_batch_neg_tail.to(device)  # index error？
+            kg_batch_neg_tail = kg_batch_neg_tail.to(device)
 
             kg_batch_loss = model.calculate_loss_transE(kg_batch_head, kg_batch_relation, kg_batch_pos_tail,
                                                         kg_batch_neg_tail)
@@ -130,38 +133,17 @@ if __name__ == '__main__':
             kg_res.add_row([epoch, trans_e_t - trans_s_t, kg_loss.item()])
             print(kg_res)
 
+    # TODO: save trained embedding
+    # if args.pretrain:
+    #     # if not os.path.exists(world.PATH_PRETRAIN):
+    #     #     os.makedirs(world.PATH_PRETRAIN)
+    #     output = args.pretrain_path + args.dataset + '_' + '.pretrain'
+    #     user_emb, item_emb = model.calculate_embedding()
+    #     save_emb = {'embedding_user.weight': user_emb, 'embedding_item.weight': item_emb}
+    #     torch.save(save_emb, output)
+
     for epoch in range(args.epoch):
         model.train()
-
-        # """training KG"""
-        # trans_s_t = time()
-        # kg_loss = 0
-        # n_kg_batch = len(kg_triplet) // args.kg_batch_size + 1
-        # for iter in range(1, n_kg_batch + 1):
-        #     kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = kg_loader.generate_kg_batch(
-        #         kg_dict, args.kg_batch_size, n_entities)
-        #     kg_batch_head = kg_batch_head.to(device)
-        #     kg_batch_relation = kg_batch_relation.to(device)
-        #     kg_batch_pos_tail = kg_batch_pos_tail.to(device)
-        #     kg_batch_neg_tail = kg_batch_neg_tail.to(device)    # index error？
-        #
-        #     kg_batch_loss = model.calculate_loss_transE(kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail)
-        #
-        #     if np.isnan(kg_batch_loss.cpu().detach().numpy()):
-        #         logging.info('ERROR (KG Training): Epoch {:04d} Iter {:04d} / {:04d} Loss is nan.'.format(epoch, iter, n_kg_batch))
-        #         sys.exit()
-        #
-        #     kg_batch_loss.backward()
-        #     optimizer.step()
-        #     optimizer.zero_grad()
-        #     kg_loss += kg_batch_loss
-        #
-        # trans_e_t = time()
-        # kg_res = PrettyTable()
-        # kg_res.field_names = ["Epoch", "training time", "Loss"]
-        # kg_res.add_row([epoch, trans_e_t - trans_s_t, kg_loss.item()])
-        # print(kg_res)
-
         """training CF"""
         index = np.arange(len(train_cf))
         np.random.shuffle(index)
