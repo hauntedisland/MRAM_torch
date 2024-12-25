@@ -67,9 +67,8 @@ init = nn.init.xavier_uniform_
 
 
 class GraphConv(nn.Module):
-    def __init__(self, user_emb, adj_mat, conv_layers, n_users, n_items, n_relations):
+    def __init__(self, adj_mat, conv_layers, n_users, n_items, n_relations):
         super(GraphConv, self).__init__()
-        self.user_emb = user_emb  # [entity, channel]
         self.adj_mat = adj_mat  # [entity+n_relation-1, entity+n_relation-1]
         self.convs = conv_layers  # encode layer
         self.n_users = n_users
@@ -77,8 +76,8 @@ class GraphConv(nn.Module):
         self.n_relation = n_relations - 1
 
     def forward(self, entity_kg_emb):  # entity kg embedding from TransE
-        user_emb = self.user_emb
-        item_emb = entity_kg_emb[:self.n_items, :]
+        user_emb = entity_kg_emb[:self.n_users, :]
+        item_emb = entity_kg_emb[self.n_users:self.n_users + self.n_items, :]
         # concat user emb and updated item emb
         all_emb = torch.cat([user_emb, item_emb], dim=0)
         embs = [all_emb]
@@ -90,9 +89,7 @@ class GraphConv(nn.Module):
 
         embs = torch.stack(embs, dim=1)
         light_out = torch.mean(embs, dim=1)
-
         return light_out[:self.n_users], light_out[self.n_users:]
-        # return light_out[:self.n_users]
 
 
 class Disentangle(nn.Module):
@@ -105,7 +102,7 @@ class Disentangle(nn.Module):
         self.n_relation = n_relation
         self.emb_size = channel
         self.convs = layer
-        self.net = nn.Sequential(nn.Linear())
+        # self.net = nn.Sequential(nn.Linear())
         # 将relation解耦和intent解耦矩阵设置为可学习的
         weight = init(torch.empty(self.n_intent, self.n_relation))      # xavier initialization
         self.weight = nn.Parameter(weight)
@@ -159,8 +156,9 @@ class Disentangle(nn.Module):
     #     assert item_int_emb.shape == (self.n_items, self.emb_size * self.n_intent)
     #     return user_int_emb, item_int_emb
 
-    def forward(self, user_emb, item_emb, r_kg_emb):  # relation embedding from transE
-        # ui_emb = all_emb[:self.n_users + self.n_items, :]
+    def forward(self, user_emb, entity_emb, r_kg_emb):  # relation embedding from transE
+        item_emb1 = entity_emb[:self.n_items, :]  # 从trans的entity embedding拿来item embedding直接用
+        # TODO: 目前给所有user的weight都是一样的，没有personalized
         # disen_weight = torch.mm(nn.Softmax(dim=-1)(self.weight), relation_emb).unsqueeze(0).expand(
         #     self.n_users+self.n_items, -1, -1)
         # ui_emb = ui_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
@@ -171,7 +169,7 @@ class Disentangle(nn.Module):
         disen_weight1 = torch.mm(nn.Softmax(dim=-1)(self.weight), r_kg_emb).unsqueeze(0).expand(
             self.n_items, -1, -1)
         user_emb1 = user_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
-        item_emb = item_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
+        item_emb = item_emb1.unsqueeze(1).expand(-1, self.n_intent, -1)
         # concat user, item embedding to n_intent*dim
         user_int_emb = (user_emb1 * disen_weight).reshape(self.n_users, self.n_intent * self.emb_size)
         item_int_emb = (item_emb * disen_weight1).reshape(self.n_items, self.n_intent * self.emb_size)
@@ -231,15 +229,15 @@ class MRAM(nn.Module):
         self.graph = graph  # KG
         self.edge_index, self.edge_type = self._get_edges(graph)
         # self.kg_hop = args_config.layer_num_kg
-        # self.all_embed = torch.nn.Embedding(self.n_nodes, self.emb_size)
-        self.user_embed = torch.nn.Embedding(self.n_users, self.emb_size)
-        self.entity_embed = torch.nn.Embedding(self.n_entities, self.emb_size)
+        self.all_embed = torch.nn.Embedding(self.n_nodes, self.emb_size)
+        # self.user_embed = torch.nn.Embedding(self.n_users, self.emb_size)
+        # self.entity_embed = torch.nn.Embedding(self.n_entities, self.emb_size)
         self.relation_emb = torch.nn.Embedding(self.n_relations, self.emb_size)
         self.trans_w = torch.nn.Embedding(self.n_relations, self.emb_size * self.kg_emb_size)
 
         self.ckg_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat).to(self.device)
 
-        self.encoder = GraphConv(self.user_embed.weight, self.ckg_mat, self.encode_layer, self.n_users,
+        self.encoder = GraphConv(self.ckg_mat, self.encode_layer, self.n_users,
                                  self.n_items, self.n_relations)
         self.decoder = Disentangle(self.emb_size, self.n_users, self.n_items, self.n_intent, self.n_relations, self.decode_layer)
         # self.decoder = Disentangle(self.cf_mat, self.emb_size, self.decode_layer, self.n_users, self.n_items,
@@ -260,18 +258,18 @@ class MRAM(nn.Module):
         return torch.sparse.FloatTensor(i, v, coo.shape)
 
     def _calculate_embedding(self):
-        user_emb, item_emb = self.encoder(self.entity_embed.weight)  # 传入训练来的trans embedding
+        user_emb, item_emb = self.encoder(self.all_embed.weight)  # TODO: 传入训练来的trans embedding
         user_int_emb, item_int_emb = self.decoder(user_emb, item_emb, self.relation_emb.weight)
-        # user_int_emb, item_int_emb = self.decoder(self.all_embed.weight, self.relation_emb.weight)
+        # user_int_emb, item_int_emb = self.decoder(user_emb, self.entity_embed.weight, self.relation_emb.weight)
         return user_int_emb, item_int_emb
 
     def _get_kg_embedding(self, h, r, pos_t, neg_t):  # rectorch
-        h_e = self.entity_embed(h).unsqueeze(1)  # (kg_batch_size, 1, relation_dim)
-        pos_t_e = self.entity_embed(pos_t).unsqueeze(1)
-        neg_t_e = self.entity_embed(neg_t).unsqueeze(1)
-        # h_e = self.all_embed(h).unsqueeze(1) # (kg_batch_size, 1, relation_dim)
-        # pos_t_e = self.all_embed(pos_t).unsqueeze(1)
-        # neg_t_e = self.all_embed(neg_t).unsqueeze(1)
+        # h_e = self.entity_embed(h).unsqueeze(1)  # (kg_batch_size, 1, relation_dim)
+        # pos_t_e = self.entity_embed(pos_t).unsqueeze(1)
+        # neg_t_e = self.entity_embed(neg_t).unsqueeze(1)
+        h_e = self.all_embed(h).unsqueeze(1)  # (kg_batch_size, 1, relation_dim)
+        pos_t_e = self.all_embed(pos_t).unsqueeze(1)
+        neg_t_e = self.all_embed(neg_t).unsqueeze(1)
         r_e = self.relation_emb(r)
         r_trans_w = self.trans_w(r).view(r.size(0), self.emb_size,
                                          self.kg_emb_size)  # (kg_batch_size, embed_dim, kg_dim)

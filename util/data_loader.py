@@ -68,15 +68,15 @@ def read_triplets(file_name, mode):
             triplets = can_triplets_np.copy()
     else:
         triplets = can_triplets_np.copy()
-    # n_nodes = max(n_nodes, max(max(triplets[:, 0]), max(triplets[:, 2])) + 1)
-    n_entities = max(max(triplets[:, 0]), max(triplets[:, 2])) + 1
-    n_nodes = n_entities + n_users
+    n_nodes = max(n_nodes, max(max(triplets[:, 0]), max(triplets[:, 2])) + 1)
+    # n_entities = max(max(triplets[:, 0]), max(triplets[:, 2])) + 1
+    # n_nodes = n_entities + n_users
     n_relations = max(n_relations, max(triplets[:, 1]) + 1)
 
     return triplets     # np.array
 
 
-def build_graph(train_data, kg_triplets):
+def build_graph(train_data, kg_triplets, ui_triplets):
     ckg_graph = nx.MultiDiGraph()
     rd = defaultdict(list)
     hd = defaultdict(list)
@@ -85,8 +85,8 @@ def build_graph(train_data, kg_triplets):
         rd[0].append([u_id, i_id])
 
     print("\nBegin to load knowledge graph triples ...")
-    # for h_id, r_id, t_id in tqdm(ui_triplets, ascii=True):
-    #     ckgd[h_id].append([t_id, r_id])   # kg dict
+    for h_id, r_id, t_id in tqdm(ui_triplets, ascii=True):
+        hd[h_id].append([t_id, r_id])   # kg dict
     for h_id, r_id, t_id in tqdm(kg_triplets, ascii=True):
         ckg_graph.add_edge(h_id, t_id, key=r_id)
         rd[r_id].append([h_id, t_id])
@@ -213,12 +213,13 @@ def load_data(model_args):
 
     print('combining train_cf and kg data ...')
 
-    kg_triplets = read_triplets(directory + 'kg.txt', mode="kg")
-    # ui_triplets = read_triplets(directory + 'train_tri.txt', mode="ui")    # include UI triplets
+    # kg_triplets = read_triplets(directory + 'kg.txt', mode="kg")
+    kg_triplets = read_triplets(directory + 'kg_tri.txt', mode="kg")
+    ui_triplets = read_triplets(directory + 'train_tri.txt', mode="ui")    # include UI triplets
 
     print('building the graph ...')
-    # graph, relation_dict, ckg_dict = build_graph(train_cf, kg_triplets, ui_triplets)
-    graph, relation_dict, kg_dict = build_graph(train_cf, kg_triplets)
+    graph, relation_dict, ckg_dict = build_graph(train_cf, kg_triplets, ui_triplets)
+    # graph, relation_dict, kg_dict = build_graph(train_cf, kg_triplets)
 
     print('building the adj mat ...')
     # ckg_mat, ckg_mean_mat = build_sparse_relational_graph(relation_dict)
@@ -236,4 +237,4 @@ def load_data(model_args):
     }
 
     # return train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat
-    return train_cf, test_cf, user_dict, kg_dict, kg_triplets, n_params, graph, adj_mat
+    return train_cf, test_cf, user_dict, ckg_dict, kg_triplets, n_params, graph, adj_mat

@@ -61,8 +61,8 @@ if __name__ == '__main__':
     device = torch.device("cuda:" + str(args.gpu_id)) if args.cuda else torch.device("cpu")
 
     """build dataset"""
-    # train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat = load_data(args)    # 修改adj_mat为[user+item, user+item]
-    train_cf, test_cf, user_dict, kg_dict, kg_triplet, n_params, graph, adj_mat = load_data(args)  # without kg
+    # train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat = load_data(args)    # CKG卷积
+    train_cf, test_cf, user_dict, ckg_dict, kg_triplet, n_params, graph, adj_mat = load_data(args)  # without kg
 
     n_users = n_params['n_users']
     n_items = n_params['n_items']
@@ -103,12 +103,11 @@ if __name__ == '__main__':
         kg_loss = 0
         n_kg_batch = len(kg_triplet) // args.kg_batch_size + 1
         for iter in range(1, n_kg_batch + 1):
-            # kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = kg_loader.generate_kg_batch(
-            #     ckg_dict, args.kg_batch_size, n_nodes)
             kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = kg_loader.generate_kg_batch(
-                kg_dict, args.kg_batch_size, n_entities)
+                ckg_dict, args.kg_batch_size, n_nodes)
+            # kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = kg_loader.generate_kg_batch(
+            #     kg_dict, args.kg_batch_size, n_entities)
             kg_batch_head = kg_batch_head.to(device)
-            # kg_batch_head_check = kg_batch_head.tolist()
             kg_batch_relation = kg_batch_relation.to(device)
             kg_batch_pos_tail = kg_batch_pos_tail.to(device)
             kg_batch_neg_tail = kg_batch_neg_tail.to(device)
