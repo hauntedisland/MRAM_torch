@@ -45,28 +45,22 @@ def remap_item(train_data, test_data):
         test_user_set[int(u_id)].append(int(i_id))
 
 
-def read_triplets(file_name, mode):
+def read_triplets(file_name):
     global n_entities, n_relations, n_nodes
 
     can_triplets_np = np.loadtxt(file_name, dtype=np.int32)
     can_triplets_np = np.unique(can_triplets_np, axis=0)
-    if mode == "kg":
-        if args.inverse_r:
-            # get triplets with inverse direction like <entity, is-aspect-of, item>
-            inv_triplets_np = can_triplets_np.copy()
-            inv_triplets_np[:, 0] = can_triplets_np[:, 2]
-            inv_triplets_np[:, 2] = can_triplets_np[:, 0]
-            inv_triplets_np[:, 1] = can_triplets_np[:, 1] + max(can_triplets_np[:, 1]) + 1
-            # consider two additional relations --- 'interact' and 'be interacted'
-            can_triplets_np[:, 1] = can_triplets_np[:, 1] + 1
-            inv_triplets_np[:, 1] = inv_triplets_np[:, 1] + 1
-            # get full version of knowledge graph
-            triplets = np.concatenate((can_triplets_np, inv_triplets_np), axis=0)
-        else:
-            # consider two additional relations --- 'interact'.
-            can_triplets_np[:, 1] = can_triplets_np[:, 1] + 1
-            triplets = can_triplets_np.copy()
+    if args.inverse_r:
+        # get triplets with inverse direction like <entity, is-aspect-of, item>
+        inv_triplets_np = can_triplets_np.copy()
+        inv_triplets_np[:, 0] = can_triplets_np[:, 2]
+        inv_triplets_np[:, 2] = can_triplets_np[:, 0]
+        inv_triplets_np[:, 1] = can_triplets_np[:, 1] + max(can_triplets_np[:, 1]) + 1
+        # get full version of knowledge graph
+        triplets = np.concatenate((can_triplets_np, inv_triplets_np), axis=0)
     else:
+        # consider two additional relations --- 'interact'.
+        can_triplets_np[:, 1] = can_triplets_np[:, 1] + 1
         triplets = can_triplets_np.copy()
     n_nodes = max(n_nodes, max(max(triplets[:, 0]), max(triplets[:, 2])) + 1)
     # n_entities = max(max(triplets[:, 0]), max(triplets[:, 2])) + 1
@@ -76,7 +70,7 @@ def read_triplets(file_name, mode):
     return triplets     # np.array
 
 
-def build_graph(train_data, kg_triplets, ui_triplets):
+def build_graph(train_data, kg_triplets):
     ckg_graph = nx.MultiDiGraph()
     rd = defaultdict(list)
     hd = defaultdict(list)
@@ -85,8 +79,8 @@ def build_graph(train_data, kg_triplets, ui_triplets):
         rd[0].append([u_id, i_id])
 
     print("\nBegin to load knowledge graph triples ...")
-    for h_id, r_id, t_id in tqdm(ui_triplets, ascii=True):
-        hd[h_id].append([t_id, r_id])   # kg dict
+    # for h_id, r_id, t_id in tqdm(ui_triplets, ascii=True):
+    #     hd[h_id].append([t_id, r_id])   # kg dict
     for h_id, r_id, t_id in tqdm(kg_triplets, ascii=True):
         ckg_graph.add_edge(h_id, t_id, key=r_id)
         rd[r_id].append([h_id, t_id])
@@ -213,12 +207,10 @@ def load_data(model_args):
 
     print('combining train_cf and kg data ...')
 
-    # kg_triplets = read_triplets(directory + 'kg.txt', mode="kg")
-    kg_triplets = read_triplets(directory + 'kg_tri.txt', mode="kg")
-    ui_triplets = read_triplets(directory + 'train_tri.txt', mode="ui")    # include UI triplets
+    triplets = read_triplets(directory + 'triplets.txt')   # edit file path
 
     print('building the graph ...')
-    graph, relation_dict, ckg_dict = build_graph(train_cf, kg_triplets, ui_triplets)
+    graph, relation_dict, ckg_dict = build_graph(train_cf, triplets)
     # graph, relation_dict, kg_dict = build_graph(train_cf, kg_triplets)
 
     print('building the adj mat ...')
@@ -237,4 +229,4 @@ def load_data(model_args):
     }
 
     # return train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat
-    return train_cf, test_cf, user_dict, ckg_dict, kg_triplets, n_params, graph, adj_mat
+    return train_cf, test_cf, user_dict, ckg_dict, triplets, n_params, graph, adj_mat
