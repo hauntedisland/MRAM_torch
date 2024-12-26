@@ -3,6 +3,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch_geometric.nn as pyg_nn
+from torch_geometric.utils import from_scipy_sparse_matrix
 # import util.losses
 
 init = nn.init.xavier_uniform_
@@ -69,11 +71,17 @@ init = nn.init.xavier_uniform_
 class GraphConv(nn.Module):
     def __init__(self, adj_mat, conv_layers, n_users, n_items, n_relations):
         super(GraphConv, self).__init__()
-        self.adj_mat = adj_mat  # [entity+n_relation-1, entity+n_relation-1]
+        self.adj_mat = adj_mat  # edge index
         self.convs = conv_layers  # encode layer
         self.n_users = n_users
         self.n_items = n_items
         self.n_relation = n_relations - 1
+        # self.W = nn.Parameter(init(torch.empty(size=(64, 64))))
+        self.convs_layers = nn.ModuleList([
+            pyg_nn.GCNConv(in_channels=64, out_channels=64) for _ in range(conv_layers)
+        ])
+        # self.conv = nn.Linear(64, 64)
+        # self.leaky_relu = nn.LeakyReLU(0.2)
 
     def forward(self, entity_kg_emb):  # entity kg embedding from TransE
         user_emb = entity_kg_emb[:self.n_users, :]
@@ -81,11 +89,15 @@ class GraphConv(nn.Module):
         # concat user emb and updated item emb
         all_emb = torch.cat([user_emb, item_emb], dim=0)
         embs = [all_emb]
-        temp_emb = all_emb
-        # GCN
+        # TODO: 更换成GCN
         for i in range(self.convs):
-            temp_emb = torch.sparse.mm(self.adj_mat, temp_emb)
-            embs.append(temp_emb)
+            all_emb = self.convs_layers[i](all_emb, self.adj_mat)
+            # all_emb = self.conv(all_emb)
+            # all_emb = torch.matmul(all_emb, self.W)
+            # norm_emb = torch.sparse.mm(self.adj_mat, all_emb)
+            # all_emb = self.leaky_relu(all_emb)
+            norm_emb = F.normalize(all_emb, p=2, dim=1)
+            embs.append(norm_emb)
 
         embs = torch.stack(embs, dim=1)
         light_out = torch.mean(embs, dim=1)
@@ -93,7 +105,7 @@ class GraphConv(nn.Module):
 
 
 class Disentangle(nn.Module):
-    def __init__(self, channel, n_users, n_items, n_intent, n_relation, layer):
+    def __init__(self, channel, n_users, n_items, n_intent, n_relation, layer, ind):
         super(Disentangle, self).__init__()
         self.n_users = n_users
         self.n_items = n_items
@@ -102,10 +114,11 @@ class Disentangle(nn.Module):
         self.n_relation = n_relation
         self.emb_size = channel
         self.convs = layer
-        # self.net = nn.Sequential(nn.Linear())
+        self.ind = ind
         # 将relation解耦和intent解耦矩阵设置为可学习的
         weight = init(torch.empty(self.n_intent, self.n_relation))      # xavier initialization
         self.weight = nn.Parameter(weight)
+        self.W = nn.Linear(64, 64)
 
     def cal_edge(self, tensor):
         S = torch.mm(tensor, tensor.T)
@@ -156,23 +169,23 @@ class Disentangle(nn.Module):
     #     assert item_int_emb.shape == (self.n_items, self.emb_size * self.n_intent)
     #     return user_int_emb, item_int_emb
 
-    def forward(self, user_emb, entity_emb, r_kg_emb):  # relation embedding from transE
-        item_emb1 = entity_emb[:self.n_items, :]  # 从trans的entity embedding拿来item embedding直接用
-        # TODO: 目前给所有user的weight都是一样的，没有personalized
-        # disen_weight = torch.mm(nn.Softmax(dim=-1)(self.weight), relation_emb).unsqueeze(0).expand(
-        #     self.n_users+self.n_items, -1, -1)
-        # ui_emb = ui_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
-        # ui_int_emb = (ui_emb * disen_weight).reshape(-1, self.n_intent * self.emb_size)
 
-        disen_weight = torch.mm(nn.Softmax(dim=-1)(self.weight), r_kg_emb).unsqueeze(0).expand(
-            self.n_users, -1, -1)
-        disen_weight1 = torch.mm(nn.Softmax(dim=-1)(self.weight), r_kg_emb).unsqueeze(0).expand(
-            self.n_items, -1, -1)
-        user_emb1 = user_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
-        item_emb = item_emb1.unsqueeze(1).expand(-1, self.n_intent, -1)
+    def forward(self, user_emb, entity_emb, r_kg_emb):  # relation embedding from transE
+        item_emb1 = entity_emb[:self.n_items, :]
+        intent_emb = torch.mm(nn.Softmax(dim=-1)(self.weight), r_kg_emb)
+        all_emb = torch.cat([user_emb, item_emb1, intent_emb], dim=0)
+        all_emb = self.W(all_emb)
+        user_int_emb = all_emb[:self.n_users, :]
+        item_int_emb = all_emb[self.n_users:self.n_users + self.n_items, :]
+        # disen_weight = torch.mm(nn.Softmax(dim=-1)(self.weight), r_kg_emb).unsqueeze(0).expand(
+        #     self.n_users, -1, -1)
+        # disen_weight1 = torch.mm(nn.Softmax(dim=-1)(self.weight), r_kg_emb).unsqueeze(0).expand(
+        #     self.n_items, -1, -1)
+        # user_emb1 = user_emb.unsqueeze(1).expand(-1, self.n_intent, -1)
+        # item_emb = item_emb1.unsqueeze(1).expand(-1, self.n_intent, -1)
         # concat user, item embedding to n_intent*dim
-        user_int_emb = (user_emb1 * disen_weight).reshape(self.n_users, self.n_intent * self.emb_size)
-        item_int_emb = (item_emb * disen_weight1).reshape(self.n_items, self.n_intent * self.emb_size)
+        # user_int_emb = (user_emb1 * disen_weight).reshape(self.n_users, self.n_intent * self.emb_size)
+        # item_int_emb = (item_emb * disen_weight1).reshape(self.n_items, self.n_intent * self.emb_size)
 
         # method2: use subgraph adjacent matrix
         # all_emb = torch.cat((user_emb, item_emb1), dim=0).unsqueeze(1).expand(-1, self.n_intent,
@@ -197,15 +210,79 @@ class Disentangle(nn.Module):
 
         # user_int_emb = ui_int_emb[:self.n_users, :]
         # item_int_emb = ui_int_emb[self.n_users:, :]
-        assert user_int_emb.shape == (self.n_users, self.emb_size * self.n_intent)
-        assert item_int_emb.shape == (self.n_items, self.emb_size * self.n_intent)
-        return user_int_emb, item_int_emb
+        # assert user_int_emb.shape == (self.n_users, self.emb_size * self.n_intent)
+        # assert item_int_emb.shape == (self.n_items, self.emb_size * self.n_intent)
+        return user_int_emb, item_int_emb, self.calculate_cor_loss(intent_emb)
+
+    def calculate_cor_loss(self, tensors):
+        def CosineSimilarity(tensor_1, tensor_2):
+            # tensor_1, tensor_2: [channel]
+            normalized_tensor_1 = torch.nn.functional.normalize(tensor_1, dim=0)
+            normalized_tensor_2 = torch.nn.functional.normalize(tensor_2, dim=0)
+            return (normalized_tensor_1 * normalized_tensor_2).sum(
+                dim=0
+            ) ** 2  # no negative
+
+        def DistanceCorrelation(tensor_1, tensor_2):
+            # tensor_1, tensor_2: [channel]
+            # ref: https://en.wikipedia.org/wiki/Distance_correlation
+            channel = tensor_1.shape[0]
+            zeros = torch.zeros(channel, channel).to(tensor_1.device)
+            zero = torch.zeros(1).to(tensor_1.device)
+            tensor_1, tensor_2 = tensor_1.unsqueeze(-1), tensor_2.unsqueeze(-1)
+            """cul distance matrix"""
+            a_, b_ = (
+                torch.matmul(tensor_1, tensor_1.t()) * 2,
+                torch.matmul(tensor_2, tensor_2.t()) * 2,
+            )  # [channel, channel]
+            tensor_1_square, tensor_2_square = tensor_1**2, tensor_2**2
+            a, b = torch.sqrt(
+                torch.max(tensor_1_square - a_ + tensor_1_square.t(), zeros) + 1e-8
+            ), torch.sqrt(
+                torch.max(tensor_2_square - b_ + tensor_2_square.t(), zeros) + 1e-8
+            )  # [channel, channel]
+            """cul distance correlation"""
+            A = a - a.mean(dim=0, keepdim=True) - a.mean(dim=1, keepdim=True) + a.mean()
+            B = b - b.mean(dim=0, keepdim=True) - b.mean(dim=1, keepdim=True) + b.mean()
+            dcov_AB = torch.sqrt(torch.max((A * B).sum() / channel**2, zero) + 1e-8)
+            dcov_AA = torch.sqrt(torch.max((A * A).sum() / channel**2, zero) + 1e-8)
+            dcov_BB = torch.sqrt(torch.max((B * B).sum() / channel**2, zero) + 1e-8)
+            return dcov_AB / torch.sqrt(dcov_AA * dcov_BB + 1e-8)
+
+        def MutualInformation(tensors):
+            # tensors: [n_factors, dimension]
+            # normalized_tensors: [n_factors, dimension]
+            normalized_tensors = torch.nn.functional.normalize(tensors, dim=1)
+            scores = torch.mm(normalized_tensors, normalized_tensors.t())
+            scores = torch.exp(scores / self.temperature)
+            cor_loss = -torch.sum(torch.log(scores.diag() / scores.sum(1)))
+            return cor_loss
+
+        """cul similarity for each latent factor weight pairs"""
+        if self.ind == "mi":
+            return MutualInformation(tensors)
+        elif self.ind == "distance":
+            cor_loss = 0.0
+            for i in range(self.n_intent):
+                for j in range(i + 1, self.n_intent):
+                    cor_loss += DistanceCorrelation(tensors[i], tensors[j])
+        elif self.ind == "cosine":
+            cor_loss = 0.0
+            for i in range(self.n_intent):
+                for j in range(i + 1, self.n_intent):
+                    cor_loss += CosineSimilarity(tensors[i], tensors[j])
+        else:
+            raise NotImplementedError(
+                f"The independence loss type [{self.ind}] has not been supported."
+            )
+        return cor_loss
 
 
 class MRAM(nn.Module):
     def __init__(self, data_config, args_config, graph, adj_mat):
         super(MRAM, self).__init__()
         self.decay = args_config.l2
+        self.sim_decay = args_config.sim_regularity
         # self.ssm = args_config.ssm
 
         # self.mess_drop_rate = args_config.mess_dropout_rate
@@ -224,10 +301,10 @@ class MRAM(nn.Module):
         self.decode_layer = args_config.decode_layer
         self.device = torch.device("cuda:" + str(args_config.gpu_id)) if args_config.cuda \
             else torch.device("cpu")
-
+        self.ind = "cosine"
         self.adj_mat = adj_mat
-        self.graph = graph  # KG
-        self.edge_index, self.edge_type = self._get_edges(graph)
+        self.graph = graph  # CKG
+        self.ckg_edge_index, self.ckg_edge_type = self._get_edges(graph)
         # self.kg_hop = args_config.layer_num_kg
         self.all_embed = torch.nn.Embedding(self.n_nodes, self.emb_size)
         # self.user_embed = torch.nn.Embedding(self.n_users, self.emb_size)
@@ -235,11 +312,13 @@ class MRAM(nn.Module):
         self.relation_emb = torch.nn.Embedding(self.n_relations, self.emb_size)
         self.trans_w = torch.nn.Embedding(self.n_relations, self.emb_size * self.kg_emb_size)
 
-        self.ckg_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat).to(self.device)
-
-        self.encoder = GraphConv(self.ckg_mat, self.encode_layer, self.n_users,
+        # self.adj_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat).to(self.device)
+        # 用ui index
+        edge_index, _ = from_scipy_sparse_matrix(self.adj_mat)
+        self.edge_index = edge_index.to(self.device)
+        self.encoder = GraphConv(self.edge_index, self.encode_layer, self.n_users,
                                  self.n_items, self.n_relations)
-        self.decoder = Disentangle(self.emb_size, self.n_users, self.n_items, self.n_intent, self.n_relations, self.decode_layer)
+        self.decoder = Disentangle(self.emb_size, self.n_users, self.n_items, self.n_intent, self.n_relations, self.decode_layer, self.ind)
         # self.decoder = Disentangle(self.cf_mat, self.emb_size, self.decode_layer, self.n_users, self.n_items,
         #                            self.n_intent, self.n_relations)
 
@@ -257,11 +336,19 @@ class MRAM(nn.Module):
         v = torch.from_numpy(coo.data).float()
         return torch.sparse.FloatTensor(i, v, coo.shape)
 
+    def _convert_sp_mat_to_edge_index(self, X):
+        coo = X.tocoo()
+        row = torch.from_numpy(coo.row).long()  # 行索引
+        col = torch.from_numpy(coo.col).long()  # 列索引
+        edge_index = torch.stack([row, col], dim=0)
+
+        return edge_index
+
     def _calculate_embedding(self):
         user_emb, item_emb = self.encoder(self.all_embed.weight)  # TODO: 传入训练来的trans embedding
-        user_int_emb, item_int_emb = self.decoder(user_emb, item_emb, self.relation_emb.weight)
+        user_int_emb, item_int_emb, cor_loss = self.decoder(user_emb, item_emb, self.relation_emb.weight)
         # user_int_emb, item_int_emb = self.decoder(user_emb, self.entity_embed.weight, self.relation_emb.weight)
-        return user_int_emb, item_int_emb
+        return user_int_emb, item_int_emb, cor_loss
 
     def _get_kg_embedding(self, h, r, pos_t, neg_t):  # rectorch
         # h_e = self.entity_embed(h).unsqueeze(1)  # (kg_batch_size, 1, relation_dim)
@@ -285,16 +372,16 @@ class MRAM(nn.Module):
         pos_item = batch['pos_items']
         neg_item = batch['neg_items']
         # 更新all_emb
-        user_int_emb, item_int_emb = self._calculate_embedding()
+        user_int_emb, item_int_emb, cor_loss = self._calculate_embedding()
         u_e = user_int_emb[user]
         pos_e, neg_e = item_int_emb[pos_item], item_int_emb[neg_item]
         # ssm_loss = self.ssm_loss(u_e, pos_e)
-        mf_loss = self.create_bpr_loss(u_e, pos_e, neg_e)
+        mf_loss = self.create_bpr_loss(u_e, pos_e, neg_e, cor_loss)
 
         return mf_loss
         # return ssm_loss + mf_loss
 
-    def create_bpr_loss(self, users, pos_items, neg_items):
+    def create_bpr_loss(self, users, pos_items, neg_items, cor):
         batch_size = users.shape[0]
         pos_scores = torch.sum(torch.mul(users, pos_items), axis=1)
         neg_scores = torch.sum(torch.mul(users, neg_items), axis=1)
@@ -305,8 +392,9 @@ class MRAM(nn.Module):
                        + torch.norm(pos_items) ** 2
                        + torch.norm(neg_items) ** 2) / 2
         emb_loss = self.decay * regularizer / batch_size
+        cor_loss = self.sim_decay * cor
         # return mf_loss
-        return mf_loss + emb_loss
+        return mf_loss + emb_loss + cor_loss
 
     def calculate_loss_transE(self, h, r, pos_t, neg_t):
         h_e, r_e, pos_t_e, neg_t_e = self._get_kg_embedding(h, r, pos_t, neg_t)
