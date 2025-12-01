@@ -22,14 +22,14 @@ init = nn.init.xavier_uniform_
 #         self.W = nn.Parameter(init(torch.empty(size=(2 * latdim, latdim)), gain=nn.init.calculate_gain('relu')))
 #         # projection from item space to relation space(?)
 #         self.W2 = nn.Parameter(init(torch.empty(size=(64, 64)), gain=nn.init.calculate_gain('relu')))
-        
+
 #         self.leakyrelu = nn.LeakyReLU(0.2)
 #         self.n_hops = n_hops
 #         self.dropout = nn.Dropout(p=mess_dropout_rate)
 #         self.n_item = n_item
 #         self.edge_index = edge_index
 #         self.edge_type = edge_type
-        
+
 #     def agg(self, entity_emb, relation_emb):
 #         head, tail = self.edge_index
 #         a_input = torch.cat([entity_emb[head], entity_emb[tail]], dim=-1)
@@ -73,7 +73,7 @@ class CKGGCN(nn.Module):
         self.layer = layer
         self.relation_emb = nn.Parameter(relation_emb.data.clone())
         self.W_Q = nn.Parameter(nn.init.normal_(torch.Tensor(dims, dims), std=0.1))
-        
+
         self.n_relation = n_relations
         self.n_heads = 2
         self.d_k = dims // self.n_heads
@@ -82,7 +82,7 @@ class CKGGCN(nn.Module):
         head, tail = self.edge_index
         head_emb = entity_emb[head]
         tail_emb = entity_emb[tail]
-        
+
         # attention from entity to item/entity
         query = (head_emb @ self.W_Q).view(-1, self.n_heads, self.d_k)
         key = (tail_emb @ self.W_Q).view(-1, self.n_heads, self.d_k)
@@ -131,7 +131,7 @@ class CKGGCN(nn.Module):
         user_embs = torch.mean(torch.stack(user_embs, dim=1), dim=1)
         entity_embs = torch.mean(torch.stack(entity_embs, dim=1), dim=1)
         return user_embs, entity_embs, self.relation_emb
-    
+
 class R_GraphConv(nn.Module):
     def __init__(self, emb_size, edge_index, edge_type, conv_layers, n_users, n_items, n_relations):
         super(R_GraphConv, self).__init__()
@@ -193,7 +193,7 @@ class R_GraphConv(nn.Module):
         final_weight = weights[-1]  # [num_relations, in_dim, out_dim]
 
         relation_emb = final_weight.mean(dim=1)  # [num_relations, out_dim]
-        
+
         return item_emb, relation_emb
 
 
@@ -240,7 +240,7 @@ class GraphConv(nn.Module):
         # self.convs_layers.append(GCNConv(self.in_channel, self.hidden_channel))
         # for _ in range(self.layer - 1):
         #     self.convs_layers.append(GCNConv(self.hidden_channel, self.hidden_channel))
-        
+
         # self.down_proj = nn.Linear(self.hidden_channel, self.out_channel)
         # self.activation = nn.ReLU()
         # self.dropout = nn.Dropout(p=0.5)
@@ -248,7 +248,7 @@ class GraphConv(nn.Module):
     def forward(self, user_emb, item_emb):
         # concat user emb and updated item emb
         all_emb = torch.cat([user_emb, item_emb], dim=0)
-        
+
         embs = []
         for i in range(self.layer):
             all_emb = self.convs_layers[i](all_emb, self.edge_index, self.edge_weight)
@@ -404,8 +404,8 @@ class Disentangle(nn.Module):
             int_emb = intent_emb[x, :]
             user_int = int_emb + user_emb   # auto broadcast
             item_int = int_emb + item_emb
-            user_int_list.append(user_int)
-            item_int_list.append(item_int)    
+            # user_int_list.append(user_int)
+            # item_int_list.append(item_int)
             user, item = self.EGLN(user_int, item_int)
             user_int_list.append(user)
             item_int_list.append(item)
@@ -661,7 +661,7 @@ class MRAM(nn.Module):
 
         self.ckg_edge_index, self.ckg_edge_type = self._get_edges(ckg_graph)
         # self.kg_edge_index, self.kg_edge_type = self._get_edges(kg_graph)
-       
+
         if pretrain_emb is not None:
             self.user_embed = torch.nn.Embedding.from_pretrained(pretrain_emb['user_emb'], freeze=False)
             self.item_embed = torch.nn.Embedding.from_pretrained(pretrain_emb['item_emb'], freeze=False)
@@ -685,9 +685,12 @@ class MRAM(nn.Module):
         self.inter_edge = [self.Graph.indices()[0, :self.Graph.indices()[0].shape[0] // 2],
                            self.Graph.indices()[1, :self.Graph.indices()[0].shape[0] // 2] - self.n_users]
         self.inter_edge = torch.stack(self.inter_edge, dim=0)
-        
+
         self.ui_mat = self._convert_sp_mat_to_sp_tensor(self.ui_mat).to(self.device)
         self.iu_mat = self._convert_sp_mat_to_sp_tensor(self.iu_mat).to(self.device)
+
+        self.cl_temp = 0.2
+        self.cl_rate = 0.1
 
         # self.kg_encoder = R_GraphConv(self.emb_size, self.ckg_edge_index, self.ckg_edge_type, self.kg_encode_layer,
         #                               self.n_users,
@@ -743,7 +746,7 @@ class MRAM(nn.Module):
         # user_int_emb, item_int_emb, user_int_list, item_int_list = self.decoder(user_emb, item_emb, r_emb)
         return user_int_emb, item_int_emb, user_int_list, item_int_list
         # return user_int_emb, item_int_emb, user_int_list, item_int_list
-        
+
 
     def _get_kg_embedding(self, h, r, pos_t, neg_t):  # rectorch
         h_e = self.all_embed(h).unsqueeze(1)  # (kg_batch_size, 1, relation_dim)
@@ -782,7 +785,7 @@ class MRAM(nn.Module):
         # for x in range(self.n_intent):
         #     user_emb = user_int_list[x][user]
         #     pos_emb = item_int_list[x][pos_item]
-        #     neg_emb = item_int_list[x][neg_item]                        
+        #     neg_emb = item_int_list[x][neg_item]
         #     intra_bpr_loss += self.create_bpr_loss_wo_cor(user_emb, pos_emb, neg_emb)
         # return intra_bpr_loss
         mf_loss = self.create_bpr_loss_wo_cor(u_e, pos_e, neg_e)
@@ -842,8 +845,51 @@ class MRAM(nn.Module):
         loss = kg_loss
         return loss
 
-    def generate(self):
-        return self._calculate_embedding()[:2]
+    def calculate_cl_loss(self, user_embeddings, item_embeddings):
+        """
+        user_embeddings: [Batch_Size, n_intent, dim]
+        item_embeddings: [Batch_Size, n_intent, dim]
 
-    def rating(self, u_g_embeddings, i_g_embeddings):
-        return torch.matmul(u_g_embeddings, i_g_embeddings.t())
+        目标：
+        正样本: (User_intent_k, Item_intent_k)
+        负样本: (User_intent_k, Item_intent_j) where j != k
+               (User_intent_k, User_intent_j) where j != k (可选，增强解耦)
+        """
+        # 1. 归一化
+        user_embeddings = F.normalize(user_embeddings, dim=-1)
+        item_embeddings = F.normalize(item_embeddings, dim=-1)
+
+        batch_size = user_embeddings.shape[0]
+        n_intent = self.n_intent
+
+        # 2. 调整维度以便计算
+        # [Batch, K, D] -> [Batch * K, D]
+        u_emb_flat = user_embeddings.view(batch_size * n_intent, -1)
+        i_emb_flat = item_embeddings.view(batch_size * n_intent, -1)
+
+        # 3. 计算相似度分数 (User vs Item)
+        # [Batch*K, D] @ [Batch*K, D].T -> [Batch*K, Batch*K]
+        # 这里包含了 Batch 内所有 User-Item 的组合
+        # 为了节省显存，我们只计算当前 Batch 内对应位置的 User-Item 矩阵
+        # 但为了实现 "不同 Intent 为负样本"，我们需要关注 Intent 维度
+
+        # 简化版：只在当前 User 和当前 Item 的 K 个 Intent 之间计算
+        # [Batch, K, D] @ [Batch, D, K] -> [Batch, K, K]
+        # sim_matrix[b, i, j] 表示第 b 个样本，User 的第 i 个 Intent 和 Item 的第 j 个 Intent 的相似度
+        sim_matrix = torch.matmul(user_embeddings, item_embeddings.transpose(1, 2))
+        sim_matrix = sim_matrix / self.cl_temp
+
+        # 4. 构建标签
+        # 正样本是主对角线 (User_intent_k, Item_intent_k)
+        # labels: [0, 1, 2, ..., K-1] for each batch
+        labels = torch.arange(n_intent).to(self.device).unsqueeze(0).expand(batch_size, -1) # [Batch, K]
+
+        # 5. 计算 CrossEntropy Loss
+        # 我们将 [Batch, K, K] 展平为 [Batch * K, K]
+        # 每一行 (User_k) 需要从 K 个 Item Intent 中找到属于自己的那个 Item_k
+        logits = sim_matrix.view(-1, n_intent) # [Batch * K, K]
+        targets = labels.view(-1)              # [Batch * K]
+
+        cl_loss = F.cross_entropy(logits, targets)
+
+        return cl_loss
