@@ -14,7 +14,7 @@ device = torch.device("cuda:" + str(args.gpu_id)) if args.cuda else torch.device
 BATCH_SIZE = args.test_batch_size
 batch_test_flag = args.batch_test_flag
 
-global n_users, n_items
+# global n_users, n_items
 
 
 # n_items_shared = multiprocessing.Value('i')
@@ -91,8 +91,6 @@ def get_performance(user_pos_test, r, auc, Ks):
 def test_one_user(x):
     # user u's ratings for user u
     rating = x[0]
-    # TODO: ERROR: n_items=0
-    n_items = 2345
     # uid
     u = x[1]
     # user u's items in the training set
@@ -122,7 +120,7 @@ def test(model, user_dict, n_params):
               'hit_ratio': np.zeros(len(Ks)),
               'auc': 0.}
 
-    # global n_users, n_items
+    global n_users, n_items
     n_items = n_params['n_items']
     n_users = n_params['n_users']
 
@@ -144,8 +142,7 @@ def test(model, user_dict, n_params):
 
     # TODO: incorporate intent embedding.
     # - edit embedding based on generate method. (11.13)
-    # entity_gcn_emb, user_gcn_emb = model.generate()
-    user_int_emb, item_emb = model.generate()
+    user_int_emb, item_int_emb = model.generate()
 
     for u_batch_id in range(n_user_batchs):
         start = u_batch_id * u_batch_size
@@ -167,7 +164,7 @@ def test(model, user_dict, n_params):
                 i_end = min((i_batch_id + 1) * i_batch_size, n_items)
 
                 item_batch = torch.LongTensor(np.array(range(i_start, i_end))).view(i_end - i_start).to(device)
-                i_g_embeddings = item_emb[item_batch]
+                i_g_embeddings = item_int_emb[item_batch]
 
                 i_rate_batch = model.rating(u_g_embeddings, i_g_embeddings).detach().cpu()
 
@@ -178,7 +175,7 @@ def test(model, user_dict, n_params):
         else:
             # all-item test
             item_batch = torch.LongTensor(np.array(range(0, n_items))).view(n_items, -1).to(device)
-            i_g_embeddings = item_emb[item_batch]
+            i_g_embeddings = item_int_emb[item_batch]
             rate_batch = model.rating(u_g_embeddings, i_g_embeddings).detach().cpu()
 
         user_batch_rating_uid = zip(rate_batch, user_list_batch)

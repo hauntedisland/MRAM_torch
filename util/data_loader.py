@@ -1,4 +1,6 @@
 import numpy as np
+import pandas as pd
+import torch
 from tqdm import tqdm
 import networkx as nx
 import scipy.sparse as sp
@@ -44,7 +46,6 @@ def remap_item(train_data, test_data):
     for u_id, i_id in test_data:
         test_user_set[int(u_id)].append(int(i_id))
 
-
 def read_triplets(file_name):
     global n_entities, n_relations, n_nodes
 
@@ -62,18 +63,17 @@ def read_triplets(file_name):
         # consider two additional relations --- 'interact'.
         can_triplets_np[:, 1] = can_triplets_np[:, 1] + 1
         triplets = can_triplets_np.copy()
-    n_nodes = max(n_nodes, max(max(triplets[:, 0]), max(triplets[:, 2])) + 1)
+    n_nodes = max(n_nodes, max(max(triplets[:, 0]), max(triplets[:, 2])) + 1)   # CKG
     # n_entities = max(max(triplets[:, 0]), max(triplets[:, 2])) + 1
     # n_nodes = n_entities + n_users
-    n_relations = max(n_relations, max(triplets[:, 1]) + 1)
-
+    n_relations = max(triplets[:, 1]) + 1   # 从1开始计算，已经算上了ui interact
     return triplets     # np.array
 
 
-def build_graph(train_data, kg_triplets):
-    ckg_graph = nx.MultiDiGraph()
+def build_graph(train_data, triplets):
+    kg_graph = nx.MultiDiGraph()
     rd = defaultdict(list)
-    hd = defaultdict(list)
+    
     print("Begin to load interaction triples ...")
     for u_id, i_id in tqdm(train_data, ascii=True):
         rd[0].append([u_id, i_id])
@@ -81,12 +81,21 @@ def build_graph(train_data, kg_triplets):
     print("\nBegin to load knowledge graph triples ...")
     # for h_id, r_id, t_id in tqdm(ui_triplets, ascii=True):
     #     hd[h_id].append([t_id, r_id])   # kg dict
-    for h_id, r_id, t_id in tqdm(kg_triplets, ascii=True):
-        ckg_graph.add_edge(h_id, t_id, key=r_id)
-        rd[r_id].append([h_id, t_id])
-        hd[h_id].append([t_id, r_id])
+    for h_id, r_id, t_id in tqdm(triplets, ascii=True):
+        kg_graph.add_edge(h_id, t_id, key=r_id)
+        if r_id != 0:
+            rd[r_id].append([h_id, t_id])
 
-    return ckg_graph, rd, hd
+    return kg_graph, rd
+
+def build_single_adj(relation_dict):
+    user_item_pairs = np.array(relation_dict[0])
+    cf = user_item_pairs.copy()
+    vals = [1.] * len(cf)
+
+    ui_adj = sp.coo_matrix((vals, (cf[:, 0], cf[:, 1])), shape=(n_users, n_items))
+    iu_adj = sp.coo_matrix((vals, (cf[:, 1], cf[:, 0])), shape=(n_items, n_users))
+    return ui_adj, iu_adj
 
 
 def build_adj_matrix(relation_dict):
@@ -102,18 +111,19 @@ def build_adj_matrix(relation_dict):
         return norm_adj.tocoo()
 
     print("Begin to build adjacent matrix ...")
-    np_mat = np.array(relation_dict[0])
+    np_mat = np.array(relation_dict[0])     # UI only
 
     cf = np_mat.copy()
+    
     cf[:, 1] = cf[:, 1] + n_users  # [0, n_items) -> [n_users, n_users+n_items)
     vals = [1.] * len(cf)
-    # TODO: change to: [user+item, user+item]?
+    # adj = sp.coo_matrix((vals, (cf[:, 0], cf[:, 1])), shape=(n_nodes, n_nodes))
     adj = sp.coo_matrix((vals, (cf[:, 0], cf[:, 1])), shape=(n_users + n_items, n_users + n_items))
     mean_mat = _si_norm_lap(adj)
-    # mean_mat_list = [_si_norm_lap(mat) for mat in adj_mat_list]
+
     # mean_mat = mean_mat.tocsr()[:n_users, n_users:].tocoo()
     mean_mat = mean_mat.tocsr().tocoo()
-    return mean_mat
+    return adj, mean_mat
 
 
 def build_sparse_relational_graph(relation_dict):
@@ -207,15 +217,21 @@ def load_data(model_args):
 
     print('combining train_cf and kg data ...')
 
-    triplets = read_triplets(directory + 'triplets.txt')   # edit file path
-
+    # KG
+    # kg_triplets = read_triplets(directory + 'kg.txt')
+    # kg_graph, relation_dict = build_graph(train_cf, kg_triplets)
     print('building the graph ...')
-    graph, relation_dict, ckg_dict = build_graph(train_cf, triplets)
-    # graph, relation_dict, kg_dict = build_graph(train_cf, kg_triplets)
-
+    # CKG
+    triplets = read_triplets(directory + 'triplets.txt')
+    ckg_graph, relation_dict = build_graph(train_cf, triplets)
+    # 
+    
     print('building the adj mat ...')
     # ckg_mat, ckg_mean_mat = build_sparse_relational_graph(relation_dict)
-    adj_mat = build_adj_matrix(relation_dict)
+    adj_mat, adj_mean_mat = build_adj_matrix(relation_dict)     # normalized ui mat
+    ui_mat, iu_mat = build_single_adj(relation_dict)
+
+    
     n_params = {
         'n_users': int(n_users),
         'n_items': int(n_items),
@@ -228,5 +244,5 @@ def load_data(model_args):
         'test_user_set': test_user_set
     }
 
-    # return train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat
-    return train_cf, test_cf, user_dict, ckg_dict, triplets, n_params, graph, adj_mat
+    # return train_cf, test_cf, user_dict, n_params, kg_graph, [adj_mat, ui_mat, iu_mat], adj_mean_mat
+    return train_cf, test_cf, user_dict, n_params, ckg_graph, [adj_mat, ui_mat, iu_mat], adj_mean_mat

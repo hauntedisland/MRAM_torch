@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" serverName="jianmeng@172.25.18.157:22 password" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false">
+  <component name="PublishConfigData" autoUpload="Always" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false">
     <option name="confirmBeforeUploading" value="false" />
     <serverData>
+      <paths name="3080">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="byl@172.25.18.157:22 password">
         <serverdata>
           <mappings>
@@ -45,6 +52,28 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="root@202.206.96.251:20968 password">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/MRAM" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@202.206.96.251:20968 password (2)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/MRAM" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@202.206.96.251:20968 password (3)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/MRAM" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
     </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
   </component>
 </project>

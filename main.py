@@ -1,12 +1,15 @@
 import logging
+import os.path
 import random
 import sys
-
+import argparse
 
 import torch
 import numpy as np
 
 from time import time
+
+from matplotlib import pyplot as plt
 from prettytable import PrettyTable
 
 from util.parser import parse_args
@@ -15,7 +18,7 @@ from model_torch import MRAM
 from util.evaluate import test
 from util.helper import early_stopping
 
-import kg_data_loader as kg_loader
+
 
 
 n_users = 0
@@ -38,8 +41,8 @@ def get_feed_dict(train_entity_pairs, start, end, train_user_set):
 
     feed_dict = {}
     entity_pairs = train_entity_pairs[start:end].to(device)  # 根据batch从原始ui交互数据里选当前batch
-    feed_dict['users'] = entity_pairs[:, 0]
-    feed_dict['pos_items'] = entity_pairs[:, 1]
+    feed_dict['users'] = entity_pairs[:, 0].long()
+    feed_dict['pos_items'] = entity_pairs[:, 1].long()
     feed_dict['neg_items'] = torch.LongTensor(negative_sampling(entity_pairs,
                                                                 train_user_set)).to(device)
     return feed_dict
@@ -55,14 +58,72 @@ if __name__ == '__main__':
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    """read args"""
+    """args"""
     # global args, device
-    args = parse_args()
+    parser = argparse.ArgumentParser(description="MRAM")
+
+    # ===== data ===== #
+    parser.add_argument("--dataset", nargs="?", default="movie", help="Choose a dataset:[book,last-fm,amazon-book,alibaba,music,movie,kgcl_book]")
+    parser.add_argument("--data_path", nargs="?", default="data/", help="Input data path.")
+    parser.add_argument("--pretrain_path", default="pretrain/")
+
+    # ===== train ===== #
+    parser.add_argument('--epoch', type=int, default=1000, help='number of epochs')
+    parser.add_argument('--kg_epoch', type=int, default=300, help='number of epochs')
+    parser.add_argument('--batch_size', type=int, default=1024, help='batch size')
+    parser.add_argument('--kg_batch_size', type=int, default=1024, help='batch size')
+    parser.add_argument('--test_batch_size', type=int, default=1024, help='batch size')
+    parser.add_argument('--dim', type=int, default=64, help='embedding size')
+    parser.add_argument('--kg_dim', type=int, default=64, help='KG embedding size')
+    parser.add_argument('--l2', type=float, default=1e-4, help='l2 regularization weight')
+    parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
+    parser.add_argument('--ssm', type=float, default=0.01, help='SSM loss weight')
+    parser.add_argument('--sim_regularity', type=float, default=1e-4, help='regularization weight for latent factor')
+    parser.add_argument("--inverse_r", type=bool, default=True, help="consider inverse relation or not")
+    # parser.add_argument('--layer_num_kg', default=1, type=int)      # RGAT
+    # parser.add_argument('--res_lambda', type=float, default=0.5)    # RGAT 残差链接
+    parser.add_argument("--batch_test_flag", type=bool, default=True, help="use gpu or not")
+    # parser.add_argument("--channel", type=int, default=32, help="hidden channels for model")    # 和embedding size什么区别？
+    parser.add_argument("--encode_layer", type=int, default=2, help="layer for GCN/LightGCN")
+    parser.add_argument("--kg_encode_layer", type=int, default=1, help="layer for RGCN")
+    parser.add_argument("--decode_layer", type=int, default=2, help="layer for disentangle module")
+    parser.add_argument("--cuda", type=bool, default=True, help="use gpu or not")
+    parser.add_argument("--gpu_id", type=int, default=0, help="gpu id")
+    parser.add_argument('--Ks', nargs='?', default='[20]', help='Output sizes of every layer') # change
+    parser.add_argument('--test_flag', nargs='?', default='part',
+                        help='Specify the test type from {part, full}, indicating whether the reference is done in mini-batch')
+    parser.add_argument('--pretrain', type=bool, default=True, help='use pretrain KGIN embedding or not')
+    # ===== relation context ===== #
+    parser.add_argument("--n_intent", type=int, default=4, help="number of users' intent")
+    parser.add_argument("--topk", type=int, default=3, help="select top-k similarities for subgraph(EGLN)")
+
+    # ===== save model ===== #
+    parser.add_argument("--save", type=bool, default=False, help="save model or not")
+    parser.add_argument("--out_dir", type=str, default="./weights/", help="output directory for model")
+
+    # kgin parameters
+    parser.add_argument("--ind", type=str, default='distance', help="Independence modeling: mi, distance, cosine")
+    parser.add_argument('--context_hops', type=int, default=3, help='number of context hops')
+    parser.add_argument("--n_factors", type=int, default=4, help="number of latent factor for user favour")
+    parser.add_argument("--node_dropout", type=bool, default=True, help="consider node dropout or not")
+    parser.add_argument("--node_dropout_rate", type=float, default=0.5, help="ratio of node dropout")
+    parser.add_argument("--mess_dropout", type=bool, default=True, help="consider message dropout or not")
+    parser.add_argument("--mess_dropout_rate", type=float, default=0.1, help="ratio of node dropout")
+
+    args = parser.parse_args()
+
+    print("args.lr",args.lr)
+    print("args.l2",args.l2)
+    print("args.batch_size",args.batch_size)
+    print("args.encode_layer",args.encode_layer)
+    print("args.decode_layer",args.decode_layer)
+    print("args.ssm",args.ssm)
+
     device = torch.device("cuda:" + str(args.gpu_id)) if args.cuda else torch.device("cpu")
 
     """build dataset"""
-    # train_cf, test_cf, user_dict, n_params, graph, ckg_mat, ckg_mean_mat = load_data(args)    # CKG卷积
-    train_cf, test_cf, user_dict, ckg_dict, kg_triplet, n_params, graph, adj_mat = load_data(args)  # without kg
+    # train_cf, test_cf, user_dict, n_params, kg_graph, adj_mats, adj_mean_mat = load_data(args)  # KG
+    train_cf, test_cf, user_dict, n_params, ckg_graph, adj_mats, adj_mean_mat = load_data(args)   # CKG
 
     n_users = n_params['n_users']
     n_items = n_params['n_items']
@@ -83,12 +144,29 @@ if __name__ == '__main__':
     train_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in train_cf], np.int32))
     test_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in test_cf], np.int32))
 
-    """kg data"""
-    kg_pairs = torch.LongTensor(kg_triplet)
+    """load pretrain data"""
+    if args.pretrain:
+        user_emb_path = os.path.join(args.out_dir, f'CKGGCN_{args.dataset}_user_emb.npy')
+        item_emb_path = os.path.join(args.out_dir, f'CKGGCN_{args.dataset}_item_emb.npy')
+        r_emb_path = os.path.join(args.out_dir, f'CKGGCN_{args.dataset}_relation_emb.npy')
+
+        user_emb = torch.from_numpy(np.load(user_emb_path)).to(device)
+        item_emb = torch.from_numpy(np.load(item_emb_path)).to(device)
+        r_emb = torch.from_numpy(np.load(r_emb_path)).to(device)
+
+        pretrained_embeddings = {
+            'user_emb': user_emb,
+            'item_emb': item_emb,
+            'relation_emb': r_emb
+        }
+    else:
+        print("without pretrain")
+        pretrained_embeddings = None
 
     """define model"""
-    model = MRAM(n_params, args, graph, adj_mat).to(device)
-
+    # model = MRAM(n_params, args, kg_graph, adj_mats, adj_mean_mat, pretrained_embeddings).to(device)
+    model = MRAM(n_params, args, ckg_graph, adj_mats, adj_mean_mat, pretrained_embeddings).to(device)
+    print(model)
     """define optimizer"""
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
@@ -97,58 +175,53 @@ if __name__ == '__main__':
     should_stop = False
 
     print("... start training ...")
-    """training KG"""
-    for epoch in range(args.kg_epoch):
-        trans_s_t = time()
-        kg_loss = 0
-        n_kg_batch = len(kg_triplet) // args.kg_batch_size + 1
-        for iter in range(1, n_kg_batch + 1):
-            kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = kg_loader.generate_kg_batch(
-                ckg_dict, args.kg_batch_size, n_nodes)
-            # kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = kg_loader.generate_kg_batch(
-            #     kg_dict, args.kg_batch_size, n_entities)
-            kg_batch_head = kg_batch_head.to(device)
-            kg_batch_relation = kg_batch_relation.to(device)
-            kg_batch_pos_tail = kg_batch_pos_tail.to(device)
-            kg_batch_neg_tail = kg_batch_neg_tail.to(device)
-
-            kg_batch_loss = model.calculate_loss_transE(kg_batch_head, kg_batch_relation, kg_batch_pos_tail,
-                                                        kg_batch_neg_tail)
-
-            if np.isnan(kg_batch_loss.cpu().detach().numpy()):
-                logging.info(
-                    'ERROR (KG Training): Epoch {:04d} Iter {:04d} / {:04d} Loss is nan.'.format(epoch, iter, n_kg_batch))
-                sys.exit()
-
-            kg_batch_loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-            kg_loss += kg_batch_loss
-
-        trans_e_t = time()
-        if epoch % 3 == 2 or epoch == 0:
-            kg_res = PrettyTable()
-            kg_res.field_names = ["Epoch", "training time", "Loss"]
-            kg_res.add_row([epoch, trans_e_t - trans_s_t, kg_loss.item()])
-            print(kg_res)
-
-    # TODO: save trained embedding
-    # if args.pretrain:
-    #     # if not os.path.exists(world.PATH_PRETRAIN):
-    #     #     os.makedirs(world.PATH_PRETRAIN)
-    #     output = args.pretrain_path + args.dataset + '_' + '.pretrain'
-    #     user_emb, item_emb = model.calculate_embedding()
-    #     save_emb = {'embedding_user.weight': user_emb, 'embedding_item.weight': item_emb}
-    #     torch.save(save_emb, output)
-
+    train_losses = []
+    test_losses = []
     for epoch in range(args.epoch):
-        model.train()
+        # """training KG"""
+        # model.train()
+        # trans_s_t = time()
+        # kg_loss = 0
+        # n_kg_batch = len(kg_triplet) // args.kg_batch_size + 1
+        # for iter in range(1, n_kg_batch + 1):
+        #     kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = kg_loader.generate_kg_batch(
+        #         ckg_dict, args.kg_batch_size, n_nodes)  # kg+ui triplets
+        #     # kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = kg_loader.generate_kg_batch(
+        #     #     kg_dict, args.kg_batch_size, n_entities)
+        #     kg_batch_head = kg_batch_head.to(device)
+        #     kg_batch_relation = kg_batch_relation.to(device)
+        #     kg_batch_pos_tail = kg_batch_pos_tail.to(device)
+        #     kg_batch_neg_tail = kg_batch_neg_tail.to(device)
+        #
+        #     kg_batch_loss = model.calculate_loss_transE(kg_batch_head, kg_batch_relation, kg_batch_pos_tail,
+        #                                                 kg_batch_neg_tail)
+        #
+        #     if np.isnan(kg_batch_loss.cpu().detach().numpy()):
+        #         logging.info(
+        #             'ERROR (KG Training): Epoch {:04d} Iter {:04d} / {:04d} Loss is nan.'.format(epoch, iter,
+        #                                                                                          n_kg_batch))
+        #         sys.exit()
+        #
+        #     kg_batch_loss.backward()
+        #     optimizer.step()
+        #     optimizer.zero_grad()
+        #     kg_loss += kg_batch_loss
+        #
+        # trans_e_t = time()
+        # if epoch % 3 == 2 or epoch == 0:
+        #     average_kg_loss = kg_loss / n_kg_batch
+        #     kg_res = PrettyTable()
+        #     kg_res.field_names = ["Epoch", "training time", "Loss"]
+        #     kg_res.add_row([epoch, trans_e_t - trans_s_t, average_kg_loss.item()])
+        #     print(kg_res)
+
         """training CF"""
+        model.train()
         index = np.arange(len(train_cf))
         np.random.shuffle(index)
         train_cf_pairs = train_cf_pairs[index]
 
-        loss, s = 0, 0
+        loss, cor_loss, s = 0, 0, 0
         train_s_t = time()
         while s + args.batch_size <= len(train_cf):
             """model training"""
@@ -156,20 +229,17 @@ if __name__ == '__main__':
                                   s, s + args.batch_size,
                                   user_dict['train_user_set'])
             batch_loss = model(batch)
-            batch_loss = batch_loss
             optimizer.zero_grad()
             batch_loss.backward()
             optimizer.step()
 
             loss += batch_loss
             s += args.batch_size
-
         train_e_t = time()
 
+        """metric test"""
         if epoch % 3 == 2 or epoch == 0:
-            """testing"""
             test_s_t = time()
-            # TODO: edit
             ret = test(model, user_dict, n_params)
             test_e_t = time()
 
@@ -195,9 +265,17 @@ if __name__ == '__main__':
                 torch.save(model.state_dict(), args.out_dir + 'model_' + args.dataset + '.ckpt')
 
         else:
-            # logging.info('training loss at epoch %d: %f' % (epoch, loss.item()))
             print('using time %.4f, training loss at epoch %d: %.4f' % (train_e_t - train_s_t, epoch, loss.item()))
 
     print('early stopping at %d, recall@20:%.4f' % (epoch, cur_best_pre_0))
+
+    # """plot"""
+    # plt.plot(train_losses, label='Train Loss')
+    # plt.plot(test_losses, label='Validation Loss')
+    # plt.xlabel('Epoch')
+    # plt.ylabel('Loss')
+    # plt.title('Training and Validation Loss')
+    # plt.legend()
+    # plt.show()
 
 
