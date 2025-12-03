@@ -202,7 +202,7 @@ def load_data(model_args):
     remap_item(train_cf, test_cf)
 
     print('combinating train_cf and kg data ...')
-    triplets = read_triplets(directory + 'kg.txt')
+    triplets = read_triplets(directory + 'kg_final.txt')
 
     print('building the graph ...')
     graph, relation_dict = build_graph(train_cf, triplets)      # graph只包含KG

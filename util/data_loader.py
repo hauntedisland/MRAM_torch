@@ -19,7 +19,7 @@ n_relations = 0
 n_nodes = 0
 train_user_set = defaultdict(list)
 test_user_set = defaultdict(list)
-
+CF_RELATION_ID = -9999  # CF数据的特殊标识符
 
 def read_cf(file_name):
     inter_mat = list()
@@ -63,33 +63,64 @@ def read_triplets(file_name):
         # consider two additional relations --- 'interact'.
         can_triplets_np[:, 1] = can_triplets_np[:, 1] + 1
         triplets = can_triplets_np.copy()
-    n_nodes = max(n_nodes, max(max(triplets[:, 0]), max(triplets[:, 2])) + 1)   # CKG
-    # n_entities = max(max(triplets[:, 0]), max(triplets[:, 2])) + 1
-    # n_nodes = n_entities + n_users
+
+    n_entities = max(max(triplets[:, 0]), max(triplets[:, 2])) + 1
+    n_nodes = n_entities + n_users
     n_relations = max(triplets[:, 1]) + 1   # 从1开始计算，已经算上了ui interact
     return triplets     # np.array
 
+def read_ckg_triplets(file_name):
+    global n_entities, n_relations, n_nodes
 
-def build_graph(train_data, triplets):
+    can_triplets_np = np.loadtxt(file_name, dtype=np.int32)
+    can_triplets_np = np.unique(can_triplets_np, axis=0)
+    if args.inverse_r:
+        # get triplets with inverse direction like <entity, is-aspect-of, item>
+        inv_triplets_np = can_triplets_np.copy()
+        inv_triplets_np[:, 0] = can_triplets_np[:, 2]
+        inv_triplets_np[:, 2] = can_triplets_np[:, 0]
+        inv_triplets_np[:, 1] = can_triplets_np[:, 1] + max(can_triplets_np[:, 1]) + 1
+        # get full version of knowledge graph
+        triplets = np.concatenate((can_triplets_np, inv_triplets_np), axis=0)
+    else:
+        # consider two additional relations --- 'interact'.
+        can_triplets_np[:, 1] = can_triplets_np[:, 1] + 1
+        triplets = can_triplets_np.copy()
+    n_nodes = max(n_nodes, max(max(triplets[:, 0]), max(triplets[:, 2])) + 1)   # CKG
+    n_relations = max(triplets[:, 1]) + 1   # 从1开始计算，已经算上了ui interact
+    return triplets     # np.array
+
+def build_kg_graph(train_data, triplets):
     kg_graph = nx.MultiDiGraph()
     rd = defaultdict(list)
-    
+
+    print("\nBegin to load knowledge graph triples ...")
+    for h_id, r_id, t_id in tqdm(triplets, ascii=True):     # kg relation从0开始，注意一下ui数据别存错key
+        kg_graph.add_edge(h_id, t_id, key=r_id)
+        rd[r_id].append([h_id, t_id])
+    # 构图不用CF数据
+    for u_id, i_id in tqdm(train_data, ascii=True):
+        rd[CF_RELATION_ID].append([u_id, i_id])
+
+    return kg_graph, rd
+
+def build_ckg_graph(train_data, triplets):
+    ckg_graph = nx.MultiDiGraph()
+    rd = defaultdict(list)
+
     print("Begin to load interaction triples ...")
     for u_id, i_id in tqdm(train_data, ascii=True):
         rd[0].append([u_id, i_id])
 
     print("\nBegin to load knowledge graph triples ...")
-    # for h_id, r_id, t_id in tqdm(ui_triplets, ascii=True):
-    #     hd[h_id].append([t_id, r_id])   # kg dict
     for h_id, r_id, t_id in tqdm(triplets, ascii=True):
-        kg_graph.add_edge(h_id, t_id, key=r_id)
-        if r_id != 0:
-            rd[r_id].append([h_id, t_id])
+        ckg_graph.add_edge(h_id, t_id, key=r_id)
+        rd[r_id].append([h_id, t_id])
 
-    return kg_graph, rd
+    return ckg_graph, rd
 
 def build_single_adj(relation_dict):
-    user_item_pairs = np.array(relation_dict[0])
+    user_item_pairs = np.array(relation_dict[CF_RELATION_ID])
     cf = user_item_pairs.copy()
     vals = [1.] * len(cf)
 
@@ -111,10 +142,10 @@ def build_adj_matrix(relation_dict):
         return norm_adj.tocoo()
 
     print("Begin to build adjacent matrix ...")
-    np_mat = np.array(relation_dict[0])     # UI only
+    np_mat = np.array(relation_dict[CF_RELATION_ID])     # UI only
 
     cf = np_mat.copy()
-    
+
     cf[:, 1] = cf[:, 1] + n_users  # [0, n_items) -> [n_users, n_users+n_items)
     vals = [1.] * len(cf)
     # adj = sp.coo_matrix((vals, (cf[:, 0], cf[:, 1])), shape=(n_nodes, n_nodes))
@@ -153,7 +184,7 @@ def build_sparse_relational_graph(relation_dict):
     print("Begin to build sparse relation matrix ...")
     for r_id in tqdm(relation_dict.keys()):
         np_mat = np.array(relation_dict[r_id])
-        if r_id == 0:
+        if r_id == CF_RELATION_ID:
             cf = np_mat.copy()
             cf[:, 1] = cf[:, 1] + n_users  # [0, n_items) -> [n_users, n_users+n_items)
             vals = [1.] * len(cf)
@@ -218,20 +249,19 @@ def load_data(model_args):
     print('combining train_cf and kg data ...')
 
     # KG
-    # kg_triplets = read_triplets(directory + 'kg.txt')
-    # kg_graph, relation_dict = build_graph(train_cf, kg_triplets)
+    kg_triplets = read_triplets(directory + 'kg.txt')
+    kg_graph, relation_dict = build_kg_graph(train_cf, kg_triplets)
     print('building the graph ...')
     # CKG
-    triplets = read_triplets(directory + 'triplets.txt')
-    ckg_graph, relation_dict = build_graph(train_cf, triplets)
-    # 
-    
-    print('building the adj mat ...')
+    # triplets = read_ckg_triplets(directory + 'triplets.txt')
+    # ckg_graph, relation_dict = build_graph(train_cf, triplets)
+
+    print('building the adj mat ...')   # 只包含CF数据
     # ckg_mat, ckg_mean_mat = build_sparse_relational_graph(relation_dict)
     adj_mat, adj_mean_mat = build_adj_matrix(relation_dict)     # normalized ui mat
     ui_mat, iu_mat = build_single_adj(relation_dict)
 
-    
+
     n_params = {
         'n_users': int(n_users),
         'n_items': int(n_items),
@@ -244,5 +274,5 @@ def load_data(model_args):
         'test_user_set': test_user_set
     }
 
-    # return train_cf, test_cf, user_dict, n_params, kg_graph, [adj_mat, ui_mat, iu_mat], adj_mean_mat
-    return train_cf, test_cf, user_dict, n_params, ckg_graph, [adj_mat, ui_mat, iu_mat], adj_mean_mat
+    return train_cf, test_cf, user_dict, n_params, kg_graph, [adj_mat, ui_mat, iu_mat], adj_mean_mat
+    # return train_cf, test_cf, user_dict, n_params, ckg_graph, [adj_mat, ui_mat, iu_mat], adj_mean_mat

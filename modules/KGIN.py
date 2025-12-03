@@ -215,7 +215,7 @@ class GraphConv(nn.Module):
             entity_res_emb = torch.add(entity_res_emb, entity_emb)
             user_res_emb = torch.add(user_res_emb, user_emb)
 
-        return user_res_emb, entity_res_emb, cor
+        return entity_res_emb, user_res_emb, cor
 
 
 class Recommender(nn.Module):
@@ -280,7 +280,6 @@ class Recommender(nn.Module):
         coo = X.tocoo()
         return torch.LongTensor([coo.row, coo.col]).t()  # [-1, 2]
 
-    #
     def _get_edges(self, graph):  # graph:[num_nodes, [h, t, r_id]]
         graph_tensor = torch.tensor(list(graph.edges))  # [-1, 3]
         index = graph_tensor[:, :-1]  # [-1, 2]. [h, t]
@@ -312,13 +311,14 @@ class Recommender(nn.Module):
     def generate(self):
         user_emb = self.all_embed[:self.n_users, :]
         item_emb = self.all_embed[self.n_users:, :]
-        return self.gcn(user_emb,
+        entity_gcn_emb, user_gcn_emb = self.gcn(user_emb,
                         item_emb,
                         self.latent_emb,
                         self.edge_index,
                         self.edge_type,
                         self.interact_mat,
                         mess_dropout=False, node_dropout=False)[:-1]
+        return user_gcn_emb, entity_gcn_emb
 
     def rating(self, u_g_embeddings, i_g_embeddings):
         return torch.matmul(u_g_embeddings, i_g_embeddings.t())

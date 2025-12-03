@@ -16,6 +16,9 @@ def parse_args():
     parser.add_argument('--dim', type=int, default=64, help='embedding size')
     parser.add_argument('--kg_dim', type=int, default=64, help='KG embedding size')
     parser.add_argument('--l2', type=float, default=1e-4, help='l2 regularization weight')
+    parser.add_argument("--use_cl", type=bool, default=True, help="user intent-level CL loss or not")
+    parser.add_argument('--cl_rate', type=float, default=0.01, help='CL loss weight')
+    parser.add_argument('--cl_temp', type=float, default=0.5, help='CL temperature')
     parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
     parser.add_argument('--ssm', type=float, default=0.01, help='SSM loss weight')
     parser.add_argument('--sim_regularity', type=float, default=1e-4, help='regularization weight for latent factor')
@@ -25,7 +28,8 @@ def parse_args():
     parser.add_argument("--batch_test_flag", type=bool, default=True, help="use gpu or not")
     # parser.add_argument("--channel", type=int, default=32, help="hidden channels for model")    # 和embedding size什么区别？
     parser.add_argument("--encode_layer", type=int, default=2, help="layer for GNN encoder")
-    parser.add_argument("--decode_layer", type=int, default=2, help="layer for disentangle module")
+    parser.add_argument("--kg_encode_layer", type=int, default=1, help="layer for RGCN encoder")
+    parser.add_argument("--decode_layer", type=int, default=1, help="layer for disentangle module")
     parser.add_argument("--cuda", type=bool, default=True, help="use gpu or not")
     parser.add_argument("--gpu_id", type=int, default=0, help="gpu id")
     parser.add_argument('--Ks', nargs='?', default='[10, 20]', help='Output sizes of every layer') # change

@@ -59,58 +59,7 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = False
 
     """args"""
-    # global args, device
-    parser = argparse.ArgumentParser(description="MRAM")
-
-    # ===== data ===== #
-    parser.add_argument("--dataset", nargs="?", default="movie", help="Choose a dataset:[book,last-fm,amazon-book,alibaba,music,movie,kgcl_book]")
-    parser.add_argument("--data_path", nargs="?", default="data/", help="Input data path.")
-    parser.add_argument("--pretrain_path", default="pretrain/")
-
-    # ===== train ===== #
-    parser.add_argument('--epoch', type=int, default=1000, help='number of epochs')
-    parser.add_argument('--kg_epoch', type=int, default=300, help='number of epochs')
-    parser.add_argument('--batch_size', type=int, default=1024, help='batch size')
-    parser.add_argument('--kg_batch_size', type=int, default=1024, help='batch size')
-    parser.add_argument('--test_batch_size', type=int, default=1024, help='batch size')
-    parser.add_argument('--dim', type=int, default=64, help='embedding size')
-    parser.add_argument('--kg_dim', type=int, default=64, help='KG embedding size')
-    parser.add_argument('--l2', type=float, default=1e-4, help='l2 regularization weight')
-    parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
-    parser.add_argument('--ssm', type=float, default=0.01, help='SSM loss weight')
-    parser.add_argument('--sim_regularity', type=float, default=1e-4, help='regularization weight for latent factor')
-    parser.add_argument("--inverse_r", type=bool, default=True, help="consider inverse relation or not")
-    # parser.add_argument('--layer_num_kg', default=1, type=int)      # RGAT
-    # parser.add_argument('--res_lambda', type=float, default=0.5)    # RGAT 残差链接
-    parser.add_argument("--batch_test_flag", type=bool, default=True, help="use gpu or not")
-    # parser.add_argument("--channel", type=int, default=32, help="hidden channels for model")    # 和embedding size什么区别？
-    parser.add_argument("--encode_layer", type=int, default=2, help="layer for GCN/LightGCN")
-    parser.add_argument("--kg_encode_layer", type=int, default=1, help="layer for RGCN")
-    parser.add_argument("--decode_layer", type=int, default=2, help="layer for disentangle module")
-    parser.add_argument("--cuda", type=bool, default=True, help="use gpu or not")
-    parser.add_argument("--gpu_id", type=int, default=0, help="gpu id")
-    parser.add_argument('--Ks', nargs='?', default='[20]', help='Output sizes of every layer') # change
-    parser.add_argument('--test_flag', nargs='?', default='part',
-                        help='Specify the test type from {part, full}, indicating whether the reference is done in mini-batch')
-    parser.add_argument('--pretrain', type=bool, default=True, help='use pretrain KGIN embedding or not')
-    # ===== relation context ===== #
-    parser.add_argument("--n_intent", type=int, default=4, help="number of users' intent")
-    parser.add_argument("--topk", type=int, default=3, help="select top-k similarities for subgraph(EGLN)")
-
-    # ===== save model ===== #
-    parser.add_argument("--save", type=bool, default=False, help="save model or not")
-    parser.add_argument("--out_dir", type=str, default="./weights/", help="output directory for model")
-
-    # kgin parameters
-    parser.add_argument("--ind", type=str, default='distance', help="Independence modeling: mi, distance, cosine")
-    parser.add_argument('--context_hops', type=int, default=3, help='number of context hops')
-    parser.add_argument("--n_factors", type=int, default=4, help="number of latent factor for user favour")
-    parser.add_argument("--node_dropout", type=bool, default=True, help="consider node dropout or not")
-    parser.add_argument("--node_dropout_rate", type=float, default=0.5, help="ratio of node dropout")
-    parser.add_argument("--mess_dropout", type=bool, default=True, help="consider message dropout or not")
-    parser.add_argument("--mess_dropout_rate", type=float, default=0.1, help="ratio of node dropout")
-
-    args = parser.parse_args()
+    args = parse_args()
 
     print("args.lr",args.lr)
     print("args.l2",args.l2)
@@ -122,8 +71,8 @@ if __name__ == '__main__':
     device = torch.device("cuda:" + str(args.gpu_id)) if args.cuda else torch.device("cpu")
 
     """build dataset"""
-    # train_cf, test_cf, user_dict, n_params, kg_graph, adj_mats, adj_mean_mat = load_data(args)  # KG
-    train_cf, test_cf, user_dict, n_params, ckg_graph, adj_mats, adj_mean_mat = load_data(args)   # CKG
+    train_cf, test_cf, user_dict, n_params, kg_graph, adj_mats, adj_mean_mat = load_data(args)  # KG
+    # train_cf, test_cf, user_dict, n_params, ckg_graph, adj_mats, adj_mean_mat = load_data(args)   # CKG
 
     n_users = n_params['n_users']
     n_items = n_params['n_items']
@@ -144,28 +93,28 @@ if __name__ == '__main__':
     train_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in train_cf], np.int32))
     test_cf_pairs = torch.LongTensor(np.array([[cf[0], cf[1]] for cf in test_cf], np.int32))
 
-    """load pretrain data"""
-    if args.pretrain:
-        user_emb_path = os.path.join(args.out_dir, f'CKGGCN_{args.dataset}_user_emb.npy')
-        item_emb_path = os.path.join(args.out_dir, f'CKGGCN_{args.dataset}_item_emb.npy')
-        r_emb_path = os.path.join(args.out_dir, f'CKGGCN_{args.dataset}_relation_emb.npy')
+    # """load pretrain data"""
+    # if args.pretrain:
+    #     user_emb_path = os.path.join(args.out_dir, f'CKGGCN_{args.dataset}_user_emb.npy')
+    #     item_emb_path = os.path.join(args.out_dir, f'CKGGCN_{args.dataset}_item_emb.npy')
+    #     r_emb_path = os.path.join(args.out_dir, f'CKGGCN_{args.dataset}_relation_emb.npy')
 
-        user_emb = torch.from_numpy(np.load(user_emb_path)).to(device)
-        item_emb = torch.from_numpy(np.load(item_emb_path)).to(device)
-        r_emb = torch.from_numpy(np.load(r_emb_path)).to(device)
+    #     user_emb = torch.from_numpy(np.load(user_emb_path)).to(device)
+    #     item_emb = torch.from_numpy(np.load(item_emb_path)).to(device)
+    #     r_emb = torch.from_numpy(np.load(r_emb_path)).to(device)
 
-        pretrained_embeddings = {
-            'user_emb': user_emb,
-            'item_emb': item_emb,
-            'relation_emb': r_emb
-        }
-    else:
-        print("without pretrain")
-        pretrained_embeddings = None
+    #     pretrained_embeddings = {
+    #         'user_emb': user_emb,
+    #         'item_emb': item_emb,
+    #         'relation_emb': r_emb
+    #     }
+    # else:
+    #     print("without pretrain")
+    #     pretrained_embeddings = None
 
     """define model"""
-    # model = MRAM(n_params, args, kg_graph, adj_mats, adj_mean_mat, pretrained_embeddings).to(device)
-    model = MRAM(n_params, args, ckg_graph, adj_mats, adj_mean_mat, pretrained_embeddings).to(device)
+    model = MRAM(n_params, args, kg_graph, adj_mats, adj_mean_mat).to(device)
+    # model = MRAM(n_params, args, ckg_graph, adj_mats, adj_mean_mat).to(device)
     print(model)
     """define optimizer"""
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
