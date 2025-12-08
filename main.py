@@ -218,13 +218,5 @@ if __name__ == '__main__':
 
     print('early stopping at %d, recall@20:%.4f' % (epoch, cur_best_pre_0))
 
-    # """plot"""
-    # plt.plot(train_losses, label='Train Loss')
-    # plt.plot(test_losses, label='Validation Loss')
-    # plt.xlabel('Epoch')
-    # plt.ylabel('Loss')
-    # plt.title('Training and Validation Loss')
-    # plt.legend()
-    # plt.show()
 
 

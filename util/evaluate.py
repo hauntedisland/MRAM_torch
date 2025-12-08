@@ -140,8 +140,6 @@ def test(model, user_dict, n_params):
 
     count = 0
 
-    # TODO: incorporate intent embedding.
-    # - edit embedding based on generate method. (11.13)
     user_int_emb, item_int_emb = model.generate()
 
     for u_batch_id in range(n_user_batchs):
