@@ -99,7 +99,7 @@ class R_GraphConv(nn.Module):
         # 只做一层
         self.convs_layers.append(RGCNConv(self.in_channel, self.out_channel, self.n_relation))
         self.activation = nn.ReLU()
-        self.dropout = nn.Dropout(p=0.5)
+        self.dropout = nn.Dropout(p=0.1)
 
     def forward(self, all_emb):
         x = all_emb
@@ -111,8 +111,8 @@ class R_GraphConv(nn.Module):
         x = self.convs_layers[-1](x, self.edge_index, self.edge_type)
         out = x
 
-        user_emb = out[:self.n_users, :]
-        item_emb = out[self.n_users:self.n_users + self.n_items, :]
+        # user_emb = out[:self.n_users, :]
+        item_emb = out[:self.n_items, :]
 
         # weights = [conv.weight for conv in self.convs_layers]  # 列表，每个元素形状为 [num_relations, input_dim, output_dim]
         # weights = torch.stack(weights, dim=0)  # [num_layers, num_relations, input_dim, output_dim]
@@ -150,11 +150,12 @@ class LightGraphConv(nn.Module):
         light_out = torch.mean(embs, dim=1)
         return light_out[:self.n_users], light_out[self.n_users:]
 
-# """2_19晚优化的GraphConv类"""
 class GraphConv(nn.Module):
-    def __init__(self, adj_mat, layer, n_users, n_items, channel):
+    def __init__(self, edge_index, edge_weight, layer, n_users, n_items, channel):
         super(GraphConv, self).__init__()
-        self.adj_mat = adj_mat
+        self.edge_index = edge_index
+        self.edge_weight = edge_weight
+
         self.num_conv_layers = layer
         self.n_users = n_users
         self.n_items = n_items
@@ -174,8 +175,10 @@ class GraphConv(nn.Module):
             nn.BatchNorm1d(channel) for _ in range(layer)
         ])
 
+        self.initial_bn = nn.BatchNorm1d(channel)
+
         # 可学习的层权重，用于加权平均
-        self.weights = nn.Parameter(torch.ones(layer))
+        self.weights = nn.Parameter(torch.ones(layer + 1))
 
         # 参数初始化
         for conv in self.convs_layers:
@@ -186,11 +189,13 @@ class GraphConv(nn.Module):
     def forward(self, user_emb, item_emb):
         all_emb = torch.cat([user_emb, item_emb], dim=0)
         embs = []
+        embs = [all_emb]
+        embs = [self.initial_bn(all_emb)]
 
         for i in range(self.num_conv_layers):
             residual = all_emb  # 残差连接
             # 图卷积
-            all_emb = self.convs_layers[i](all_emb, self.adj_mat)
+            all_emb = self.convs_layers[i](all_emb, self.edge_index, self.edge_weight)
             # 残差相加
             all_emb += residual
             # 批量归一化
@@ -205,40 +210,47 @@ class GraphConv(nn.Module):
         embs = torch.stack(embs, dim=1)  # [num_nodes, num_layers, channel]
         weights = F.softmax(self.weights, dim=0)
         light_out = torch.einsum('nlc,l->nc', embs, weights)
+        # light_out = torch.mean(embs, dim=1)
 
         return light_out[:self.n_users], light_out[self.n_users:]
 
-# class GraphConv(nn.Module):
-#     def __init__(self, edge_index, edge_weight, layer, n_users, n_items, channel):
-#         super(GraphConv, self).__init__()
-#         self.edge_index = edge_index
-#         self.edge_weight = edge_weight
-#         self.layer = layer
-#         self.n_users = n_users
-#         self.n_items = n_items
-#         self.in_channel = channel
-#         self.out_channel = channel
-#         self.hidden_channel = 64
-#         # self.W = nn.Parameter(init(torch.empty(size=(64, 64))))
+class GraphConv2(nn.Module):
+    def __init__(self, edge_index, edge_weight, layer, n_users, n_items, channel):
+        super(GraphConv2, self).__init__()
+        self.edge_index = edge_index
+        self.edge_weight = edge_weight
+        self.layer = layer
+        self.n_users = n_users
+        self.n_items = n_items
+        self.in_channel = channel
+        self.out_channel = channel
+        self.hidden_channel = 64
+        # self.W = nn.Parameter(init(torch.empty(size=(64, 64))))
 
-#         self.convs_layers = nn.ModuleList([
-#             GCNConv(in_channels=channel, out_channels=channel) for _ in range(self.layer)
-#         ])
+        self.convs_layers = nn.ModuleList([
+            GCNConv(in_channels=channel, out_channels=channel) for _ in range(self.layer)
+        ])
 
-#     def forward(self, user_emb, item_emb):
-#         all_emb = torch.cat([user_emb, item_emb], dim=0)
+    def forward(self, user_emb, item_emb):
+        all_emb = torch.cat([user_emb, item_emb], dim=0)
 
-#         embs = []   # 不使用第0层emb
-#         for i in range(self.layer):
-#             all_emb = self.convs_layers[i](all_emb, self.edge_index, self.edge_weight)
-#             norm_emb = F.normalize(all_emb, p=2, dim=1)
-#             embs.append(norm_emb)
+        #1. 不使用第0层emb
+        embs = []
+        #2. 使用简单的[all_emb] 0.1101
+        embs = [all_emb]
+        #3. 添加归一化的初始嵌入 0.1292
+        embs = [F.normalize(all_emb, p=2, dim=1)]
 
-#         embs = torch.stack(embs, dim=1)
-#         out = torch.mean(embs, dim=1)
-#         # out = self.convs_layers[-1](all_emb, self.edge_index, self.edge_weight)
-#         # out = self.down_proj(out)
-#         return out[:self.n_users], out[self.n_users:]
+        for i in range(self.layer):
+            all_emb = self.convs_layers[i](all_emb, self.edge_index, self.edge_weight)
+            norm_emb = F.normalize(all_emb, p=2, dim=1)
+            embs.append(norm_emb)
+
+        embs = torch.stack(embs, dim=1)
+        out = torch.mean(embs, dim=1)
+        # out = self.convs_layers[-1](all_emb, self.edge_index, self.edge_weight)
+        # out = self.down_proj(out)
+        return out[:self.n_users], out[self.n_users:]
 
 
 class MLP(nn.Module):
@@ -460,75 +472,6 @@ class Disentangle(nn.Module):
         user_emb, item_emb = torch.split(light_out, [self.n_users, self.n_items])
         return user_emb, item_emb
 
-    def calculate_cor_loss(self, tensors):
-        def orthogonal_loss(intent_emb):
-            intent_emb_norm = intent_emb / intent_emb.norm(dim=1, keepdim=True)
-            identity = torch.eye(self.n_intent, device=intent_emb.device)
-            return torch.norm(torch.matmul(intent_emb_norm, intent_emb_norm.T) - identity)
-
-        def CosineSimilarity(tensor_1, tensor_2):
-            # tensor_1, tensor_2: [channel]
-            normalized_tensor_1 = torch.nn.functional.normalize(tensor_1, dim=0)
-            normalized_tensor_2 = torch.nn.functional.normalize(tensor_2, dim=0)
-            return (normalized_tensor_1 * normalized_tensor_2).sum(
-                dim=0
-            ) ** 2  # no negative
-
-        def DistanceCorrelation(tensor_1, tensor_2):
-            # tensor_1, tensor_2: [channel]
-            # ref: https://en.wikipedia.org/wiki/Distance_correlation
-            channel = tensor_1.shape[0]
-            zeros = torch.zeros(channel, channel).to(tensor_1.device)
-            zero = torch.zeros(1).to(tensor_1.device)
-            tensor_1, tensor_2 = tensor_1.unsqueeze(-1), tensor_2.unsqueeze(-1)
-            """cul distance matrix"""
-            a_, b_ = (
-                torch.matmul(tensor_1, tensor_1.t()) * 2,
-                torch.matmul(tensor_2, tensor_2.t()) * 2,
-            )  # [channel, channel]
-            tensor_1_square, tensor_2_square = tensor_1 ** 2, tensor_2 ** 2
-            a, b = torch.sqrt(
-                torch.max(tensor_1_square - a_ + tensor_1_square.t(), zeros) + 1e-8
-            ), torch.sqrt(
-                torch.max(tensor_2_square - b_ + tensor_2_square.t(), zeros) + 1e-8
-            )  # [channel, channel]
-            """cul distance correlation"""
-            A = a - a.mean(dim=0, keepdim=True) - a.mean(dim=1, keepdim=True) + a.mean()
-            B = b - b.mean(dim=0, keepdim=True) - b.mean(dim=1, keepdim=True) + b.mean()
-            dcov_AB = torch.sqrt(torch.max((A * B).sum() / channel ** 2, zero) + 1e-8)
-            dcov_AA = torch.sqrt(torch.max((A * A).sum() / channel ** 2, zero) + 1e-8)
-            dcov_BB = torch.sqrt(torch.max((B * B).sum() / channel ** 2, zero) + 1e-8)
-            return dcov_AB / torch.sqrt(dcov_AA * dcov_BB + 1e-8)
-
-        def MutualInformation(tensors):
-            # tensors: [n_factors, dimension]
-            # normalized_tensors: [n_factors, dimension]
-            normalized_tensors = torch.nn.functional.normalize(tensors, dim=1)
-            scores = torch.mm(normalized_tensors, normalized_tensors.t())
-            scores = torch.exp(scores / self.temperature)
-            cor_loss = -torch.sum(torch.log(scores.diag() / scores.sum(1)))
-            return cor_loss
-
-        """cul similarity for each latent factor weight pairs"""
-        if self.ind == "mi":
-            return MutualInformation(tensors)
-        elif self.ind == "distance":
-            cor_loss = 0.0
-            for i in range(self.n_intent):
-                for j in range(i + 1, self.n_intent):
-                    cor_loss += DistanceCorrelation(tensors[i], tensors[j])
-        elif self.ind == "cosine":
-            cor_loss = 0.0
-            for i in range(self.n_intent):
-                for j in range(i + 1, self.n_intent):
-                    cor_loss += CosineSimilarity(tensors[i], tensors[j])
-            # cor_loss += orthogonal_loss(tensors)
-        else:
-            raise NotImplementedError(
-                f"The independence loss type [{self.ind}] has not been supported."
-            )
-        return cor_loss
-
 
 class MRAM(nn.Module):
     def __init__(self, data_config, args_config, kg_graph, adj_mat, adj_mean_mat):
@@ -572,18 +515,13 @@ class MRAM(nn.Module):
         self.relation_embed = nn.Parameter(nn.init.normal_(torch.empty(self.n_relations, self.emb_size), std=0.1))
 
         # 用ui index
-        edge_index, edge_weight = from_scipy_sparse_matrix(self.adj_mat)
+        edge_index, edge_weight = from_scipy_sparse_matrix(self.adj_norm)
         self.edge_index = edge_index.to(self.device)
         self.edge_weight = edge_weight.to(self.device)
         self.edge_weight = self.edge_weight.to(torch.float32)
 
-        self.adj_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat).to(self.device)
-        self.adj_norm = self._convert_sp_mat_to_sp_tensor(self.adj_norm).to(self.device)
-        self.Graph = self.adj_norm.coalesce().to(self.device)
-        self.inter_edge_w = self.Graph.values()[:self.Graph.values().shape[0] // 2]
-        self.inter_edge = [self.Graph.indices()[0, :self.Graph.indices()[0].shape[0] // 2],
-                           self.Graph.indices()[1, :self.Graph.indices()[0].shape[0] // 2] - self.n_users]
-        self.inter_edge = torch.stack(self.inter_edge, dim=0)
+        # self.adj_mat = self._convert_sp_mat_to_sp_tensor(self.adj_mat).to(self.device)
+        self.adj_norm_tsr = self._convert_sp_mat_to_sp_tensor(self.adj_norm).to(self.device)
 
         self.ui_mat = self._convert_sp_mat_to_sp_tensor(self.ui_mat).to(self.device)
         self.iu_mat = self._convert_sp_mat_to_sp_tensor(self.iu_mat).to(self.device)
@@ -594,9 +532,19 @@ class MRAM(nn.Module):
         self.kg_encoder = R_GraphConv(self.emb_size, self.kg_edge_index, self.kg_edge_type, self.kg_encode_layer,
                                       self.n_users,
                                       self.n_items, self.n_relations)
-        self.encoder = GraphConv(self.adj_norm, self.encode_layer, self.n_users, self.n_items,
-                                channel=self.emb_size)
-        self.decoder = Disentangle(self.adj_norm, self.ui_mat, self.iu_mat, self.emb_size, self.n_users, self.n_items,
+
+        # 1. LightGCN
+        self.encoder = LightGraphConv(self.adj_norm_tsr, self.encode_layer, self.n_users, self.n_items)
+
+        # 2. GraphConv
+        # self.encoder = GraphConv(self.edge_index, self.edge_weight, self.encode_layer, self.n_users, self.n_items,
+        #                         channel=self.emb_size)
+
+        # 3. GraphConv2
+        # self.encoder = GraphConv2(self.edge_index, self.edge_weight, self.encode_layer, self.n_users, self.n_items,
+        #                 channel=self.emb_size)
+
+        self.decoder = Disentangle(self.adj_norm_tsr, self.ui_mat, self.iu_mat, self.emb_size, self.n_users, self.n_items,
                                    self.n_intent, self.n_relations,
                                    self.decode_layer, self.ind, k=self.k, save_path=args_config.data_path + args_config.dataset)
 
@@ -627,14 +575,15 @@ class MRAM(nn.Module):
         随机初始化u；
         RGCN: I, Wr选取最后一层的
         GCN：u,i"""
-        # item_emb, r_emb = self.kg_encoder(self.all_embed.weight)
-        # item_emb1, user_emb = self.encoder(self.user_embed.weight, item_emb)
-        # user_int_emb, item_int_emb, user_int_list, item_int_list = self.decoder(user_emb, item_emb1, r_emb)
+        kg_item_emb , r_emb = self.kg_encoder(self.entity_embed.weight)
+        user_emb, item_emb = self.encoder(self.user_embed.weight, self.item_embed.weight)
+        attention = KGAttention(self.emb_size)
+        enhanced_item_emb = attention(item_emb, kg_item_emb)
+        # user_int_emb, item_int_emb, user_int_list, item_int_list = self.decoder(user_emb, item_emb, r_emb)
 
         # return user_int_emb, item_int_emb, user_int_list, item_int_list
-        user_emb, item_emb = self.encoder(self.user_embed.weight, self.item_embed.weight)
-
-        return user_emb, item_emb
+        # user_emb, item_emb = self.encoder(self.user_embed.weight, self.item_embed.weight)
+        return user_emb, enhanced_item_emb
 
 
     def _get_kg_embedding(self, h, r, pos_t, neg_t):  # rectorch
@@ -663,7 +612,7 @@ class MRAM(nn.Module):
         pos_e, neg_e = item_emb[pos_item], item_emb[neg_item]
 
         mf_loss = self.create_bpr_loss_wo_cor(u_e, pos_e, neg_e)
-
+        total_loss = mf_loss
 
         # user_int_emb, item_int_emb, user_int_list, item_int_list = self._calculate_embedding()
 
@@ -681,9 +630,8 @@ class MRAM(nn.Module):
         #     batch_pos_intents = torch.zeros(1, device=self.device)   # 默认值
         #     cl_loss = self.calculate_cl_loss(batch_user_intents, batch_pos_intents)
 
-        # total_loss = mf_loss + self.cl_rate * cl_loss
+        # total_loss = mf_loss
 
-        total_loss = mf_loss
         return total_loss
 
 
@@ -771,3 +719,18 @@ class MRAM(nn.Module):
 
     def rating(self, u_g_embeddings, i_g_embeddings):
         return torch.matmul(u_g_embeddings, i_g_embeddings.t())
+
+
+class KGAttention(nn.Module):
+    def __init__(self, emb_size):
+        super(KGAttention, self).__init__()
+        self.gate_net = nn.Sequential(
+                nn.Linear(emb_size, emb_size),
+                nn.ReLU(),
+                nn.Linear(emb_size, emb_size),
+                nn.Sigmoid()
+            )
+
+    def forward(self, item_emb, kg_emb):
+        gate_weights = self.gate_net(kg_emb)
+        return item_emb * gate_weights
