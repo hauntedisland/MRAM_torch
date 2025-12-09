@@ -292,6 +292,20 @@ class Disentangle(nn.Module):
         self.W2 = nn.Parameter(init(torch.empty(channel, 16)))
         self.save_path = save_path
 
+    def compute_corr(self, x1, x2):
+        # Subtract the mean
+        x1_mean = torch.mean(x1, 0, True)
+        x1 = x1 - x1_mean
+        x2_mean = torch.mean(x2, 0, True)
+        x2 = x2 - x2_mean
+
+        # Compute the cross correlation
+        sigma1 = torch.sqrt(torch.mean(x1.pow(2)))
+        sigma2 = torch.sqrt(torch.mean(x2.pow(2)))
+        corr = torch.abs(torch.mean(x1 * x2)) / (sigma1 * sigma2)
+
+        return corr
+
     def forward(self, user_emb, item_emb, r_emb):
         """relation-intent attention"""
         # KGIN
@@ -301,20 +315,6 @@ class Disentangle(nn.Module):
         # col_sum = torch.sum(attention_scores, dim=0, keepdim=True)  # 线性归一化
         # attention_weights = attention_scores / col_sum
         intent_emb = torch.matmul(attention_weights, r_emb)     # [intent, dim]
-
-        """KGIN方式计算intent-aware embeddings"""
-        # score_ = torch.mm(user_emb, intent_emb.t())  # [n_user, intent]
-        # # 线性归一化
-        # col = torch.sum(score_, dim=1, keepdim=True)
-        # score = (score_ / col).unsqueeze(-1)
-        # score = nn.Softmax(dim=1)(score_).unsqueeze(-1) # [n_user, intent, 1]
-        # disen_weight = intent_emb.expand(self.n_users, self.n_intent, self.emb_size)    # [n_user, intent, 64]
-        # user_int_emb = user_emb.unsqueeze(1).expand(-1, self.n_intent, -1) * (disen_weight * score)
-        #
-        # score1_ = torch.mm(item_emb, intent_emb.t())  # [n_item, intent]
-        # score1 = nn.Softmax(dim=1)(score1_).unsqueeze(-1)   # [n_item, intent, 1]
-        # disen_weight1 = intent_emb.expand(self.n_items, self.n_intent, self.emb_size)
-        # item_int_emb = item_emb.unsqueeze(1).expand(-1, self.n_intent, -1) * (disen_weight1 * score1)
 
         """对user,item 进行个性化gate，实现解耦"""
         user_gate_logits = self.user_gate_net(user_emb)                  # [n_users, K]
@@ -329,20 +329,19 @@ class Disentangle(nn.Module):
         user_weighted = user_gate.unsqueeze(-1) * intent_expanded       # [n_users, K, D]
         item_weighted = item_gate.unsqueeze(-1) * intent_expanded       # [n_items, K, D]
         # 1.只有意图emb
-        # user_int_list = [user_weighted[:, i] for i in range(user_weighted.size(1))]
-        # item_int_list = [item_weighted[:, i] for i in range(item_weighted.size(1))]
+        user_int_list = [user_weighted[:, i] for i in range(user_weighted.size(1))]
+        item_int_list = [item_weighted[:, i] for i in range(item_weighted.size(1))]
         # 2.添加残差
-        user_int_list = [user_emb] + [user_weighted[:, i] for i in range(user_weighted.size(1))]
-        item_int_list = [item_emb] + [item_weighted[:, i] for i in range(item_weighted.size(1))]
+        # user_int_list = [user_emb] + [user_weighted[:, i] for i in range(user_weighted.size(1))]
+        # item_int_list = [item_emb] + [item_weighted[:, i] for i in range(item_weighted.size(1))]
 
-        # for x in range(self.n_intent):
-        #     intent_u_weighted = user_weighted[:, x, :]  # [n_users, D]
-        #     intent_i_weighted = item_weighted[:, x, :]  # [n_users, D]
-        #     print(f"Intent {x} weighted embedding stats:")
-        #     print(f"  Min: {torch.min(intent_u_weighted).item():.4f}")
-        #     print(f"  Max: {torch.max(intent_u_weighted).item():.4f}")
-        #     print(f"  Min: {torch.min(intent_i_weighted).item():.4f}")
-        #     print(f"  Max: {torch.max(intent_i_weighted).item():.4f}")
+        """correlation最小化"""
+        correlations = []
+        for i in range(self.n_intent):
+            for j in range(i+1, self.n_intent):
+                corr = self.compute_corr(intent_emb[i], intent_emb[j])
+                correlations.append(corr)
+        cor = sum(correlations) if correlations else torch.tensor(0.0, device=intent_emb.device)
 
         """EGLN"""
         # user_int_list, item_int_list = [], []
@@ -360,10 +359,11 @@ class Disentangle(nn.Module):
 
         # assert user_int_emb.shape == (self.n_users, self.emb_size * self.n_intent)
         # assert item_int_emb.shape == (self.n_items, self.emb_size * self.n_intent)
-        assert user_int_emb.shape == (self.n_users, self.emb_size * (self.n_intent + 1))
-        assert item_int_emb.shape == (self.n_items, self.emb_size * (self.n_intent + 1))
+        assert user_int_emb.shape == (self.n_users, self.emb_size * self.n_intent)
+        assert item_int_emb.shape == (self.n_items, self.emb_size * self.n_intent)
 
-        return user_int_emb, item_int_emb, user_int_list, item_int_list
+        # return user_int_emb, item_int_emb, user_int_list, item_int_list
+        return user_int_emb, item_int_emb, user_int_list, item_int_list, cor
 
     def nor_sparse_matrix(self, sparse_matrix):
         sparse_matrix = sparse_matrix.coalesce()
@@ -496,9 +496,9 @@ class GatedEncoder(nn.Module):
     def __init__(self, emb_size):
         super(GatedEncoder, self).__init__()
         self.gate_net = nn.Sequential(
-                nn.Linear(emb_size, emb_size),
+                # nn.Linear(emb_size, emb_size),
                 nn.ReLU(),
-                nn.Linear(emb_size, emb_size),
+                # nn.Linear(emb_size, emb_size),
                 nn.Sigmoid()
             )
 
@@ -581,7 +581,7 @@ class MRAM(nn.Module):
                                    self.n_intent, self.n_relations,
                                    self.decode_layer, self.ind, k=self.k, save_path=args_config.data_path + args_config.dataset)
 
-        self.gatedencoder = GatedEncoder(self.emb_size)
+        self.gated_encoder = GatedEncoder(self.emb_size)
 
     def _get_edges(self, graph):  # graph:[num_nodes, [h, t, r_id]]
         graph_tensor = torch.tensor(list(graph.edges))  # [-1, 3]
@@ -606,20 +606,23 @@ class MRAM(nn.Module):
     def _calculate_embedding(self):
         """
         编码：
-        随机初始化u；
+        随机初始化u；py
         RGCN: I, Wr选取最后一层的
         GCN：u,i"""
         kg_item_emb , r_emb = self.kg_encoder(self.entity_embed.weight)
+        user_emb, item_emb = self.encoder(self.user_embed.weight, self.item_embed.weight)
 
-        # 1.use decoder
-        # user_emb, item_emb = self.encoder(self.user_embed.weight, self.item_embed.weight)
+        # 1. encoder only with gated
+        enhanced_item_emb = self.gated_encoder(item_emb, kg_item_emb)
+        # return user_emb, enhanced_item_emb, None, None
+
+        # 2. encoder + decoder
         # user_int_emb, item_int_emb, user_int_list, item_int_list = self.decoder(user_emb, enhanced_item_emb, r_emb)
         # return user_int_emb, item_int_emb, user_int_list, item_int_list
 
-        # 2. only use gated encoder 1208
-        user_emb, item_emb = self.encoder(self.user_embed.weight, self.item_embed.weight)
-        enhanced_item_emb = self.gatedencoder(item_emb, kg_item_emb)
-        return user_emb, enhanced_item_emb, None, None
+        # 3. encoder + decoder + corr loss
+        user_int_emb, item_int_emb, user_int_list, item_int_list, cor = self.decoder(user_emb, enhanced_item_emb, r_emb)
+        return user_int_emb, item_int_emb, user_int_list, item_int_list, cor
 
 
     def _get_kg_embedding(self, h, r, pos_t, neg_t):  # rectorch
@@ -641,20 +644,28 @@ class MRAM(nn.Module):
         pos_item = batch['pos_items']
         neg_item = batch['neg_items']
 
-        user_int_emb, item_int_emb, user_int_list, item_int_list = self._calculate_embedding()
+        """tempo: gcn only"""
+        # user_emb, item_emb, _, _ = self._calculate_embedding()
 
-        """encoder only"""
-        user_emb, item_emb = user_int_emb, item_int_emb
-        u_e = user_emb[user]
-        pos_e, neg_e = item_emb[pos_item], item_emb[neg_item]
-        mf_loss = self.create_bpr_loss_wo_cor(u_e, pos_e, neg_e)
-        total_loss = mf_loss
+        # u_e = user_emb[user]
+        # pos_e, neg_e = item_emb[pos_item], item_emb[neg_item]
 
-        """使用BPRloss"""
-        # u_e = user_int_emb[user]    # [n_user, k*D]
-        # pos_e, neg_e = item_int_emb[pos_item], item_int_emb[neg_item]
         # mf_loss = self.create_bpr_loss_wo_cor(u_e, pos_e, neg_e)
         # total_loss = mf_loss
+
+        """ decoder"""
+        # 1. without corr
+        # user_int_emb, item_int_emb, user_int_list, item_int_list = self._calculate_embedding()
+        # u_e = user_int_emb[user]
+        # pos_e, neg_e = item_int_emb[pos_item], item_int_emb[neg_item]
+        # mf_loss = self.create_bpr_loss_wo_cor(u_e, pos_e, neg_e)
+
+        # 2. with corr
+        user_int_emb, item_int_emb, user_int_list, item_int_list, cor = self._calculate_embedding()
+        u_e = user_int_emb[user]
+        pos_e, neg_e = item_int_emb[pos_item], item_int_emb[neg_item]
+        mf_loss = self.create_bpr_loss(u_e, pos_e, neg_e, cor)
+        total_loss = mf_loss
 
         """使用正交loss"""
         # loss_orth_u = self.calculate_orthogonal_loss(user_int_emb)
@@ -712,7 +723,6 @@ class MRAM(nn.Module):
                        + torch.norm(neg_items) ** 2) / 2
         emb_loss = self.decay * regularizer / batch_size
         cor_loss = self.sim_decay * cor
-        # return mf_loss
         return mf_loss + emb_loss + cor_loss
 
     def calculate_orthogonal_loss(self, embeddings):
@@ -768,22 +778,5 @@ class MRAM(nn.Module):
     def rating(self, u_g_embeddings, i_g_embeddings):
         return torch.matmul(u_g_embeddings, i_g_embeddings.t())
 
-    # def rating(self, u_g_embeddings, i_g_embeddings):
-    #     k = self.n_intent + 1
-    #     d = self.emb_size
-
-    #     user_emb = rearrange(u_g_embeddings, 'n_user (k d) -> n_user k d', k=k, d=d)
-    #     item_emb = rearrange(i_g_embeddings, 'n_item (k d) -> n_item k d', k=k, d=d)
-
-    #     # 在每个意图下计算用户-物品内积: [n_user, n_item, k]
-    #     # einsum 自动处理广播和点积
-    #     intent_ratings = einsum(user_emb, item_emb, 'n_user k d, n_item k d -> n_user n_item k')
-
-    #     # 查看一下每个意图下的评分矩阵的均值
-    #     # for i in range(k):
-    #     #     print((sum(sum(intent_ratings[:, :, i]))/(intent_ratings.shape[0])**2).item())
-
-    #     rating_matrix = intent_ratings.mean(dim=-1)
-    #     return rating_matrix
 
 
