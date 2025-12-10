@@ -178,11 +178,13 @@ if __name__ == '__main__':
                                   s, s + args.batch_size,
                                   user_dict['train_user_set'])
             batch_loss = model(batch)
+            # batch_loss, batch_cor_loss = model(batch)
             optimizer.zero_grad()
             batch_loss.backward()
             optimizer.step()
 
             loss += batch_loss
+            # cor_loss += batch_cor_loss
             s += args.batch_size
         train_e_t = time()
 
@@ -200,6 +202,13 @@ if __name__ == '__main__':
                  ret['precision'], ret['hit_ratio']]
             )
             print(train_res)
+            # train_res.field_names = ["Epoch", "training time", "testing time", "Loss", "cor_loss", "recall", "ndcg", "precision",
+            #                          "hit_ratio"]
+            # train_res.add_row(
+            #     [epoch, train_e_t - train_s_t, test_e_t - test_s_t, loss.item(), cor_loss.item(), ret['recall'], ret['ndcg'],
+            #      ret['precision'], ret['hit_ratio']]
+            # )
+            # print(train_res)
 
             # *********************************************************
             # early stopping when cur_best_pre_0 is decreasing for ten successive steps.

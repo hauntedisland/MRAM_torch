@@ -7,11 +7,14 @@ import torch.nn.functional as F
 
 from torch_geometric.nn import RGCNConv, GCNConv, MessagePassing
 from torch_geometric.utils import from_scipy_sparse_matrix, add_self_loops, degree
-from torch_geometric.utils import softmax as scatter_softmax
-from torch_scatter import scatter_sum
+from torch_geometric.utils import softmax as pyg_softmax
+from torch_scatter import scatter_sum, scatter, scatter_softmax
 
 import math
 from einops import rearrange, repeat, einsum
+
+# import dgl
+# import dgl.function as fn
 
 init = nn.init.xavier_uniform_
 
@@ -38,7 +41,7 @@ class CKGGCN(nn.Module):
         key = (tail_emb @ self.W_Q).view(-1, self.n_heads, self.d_k)
         key = key * self.relation_emb[self.edge_type - 1].view(-1, self.n_heads, self.d_k)
         edge_attn_score = (query * key).sum(dim=-1) / math.sqrt(self.d_k)
-        edge_attn_score = scatter_softmax(edge_attn_score, head)
+        edge_attn_score = pyg_softmax(edge_attn_score, head)
         relation_emb = self.relation_emb[self.edge_type - 1]
         neigh_relation_emb = tail_emb * relation_emb  # [-1, channel]
         value = neigh_relation_emb.view(-1, self.n_heads, self.d_k)
@@ -62,7 +65,7 @@ class CKGGCN(nn.Module):
                 tail_r = tail[mask]
                 rel_attn = (entity_agg[head_r] * self.relation_emb[r]).sum(dim=1)   # [n_edges_r]
                 rel_attn = F.leaky_relu(rel_attn, 0.2)
-                rel_attn = scatter_softmax(rel_attn, head_r)
+                rel_attn = pyg_softmax(rel_attn, head_r)
                 # relation_update[r] = (entity_agg[head_r] * rel_attn.view(-1, 1)).sum(dim=0)
                 weighted_emb = entity_emb[tail_r] * rel_attn.unsqueeze(-1)  # [n_edges_r, dim]
                 relation_update[r] = scatter_sum(weighted_emb, head_r, dim=0).mean(dim=0)
@@ -81,62 +84,6 @@ class CKGGCN(nn.Module):
         user_embs = torch.mean(torch.stack(user_embs, dim=1), dim=1)
         entity_embs = torch.mean(torch.stack(entity_embs, dim=1), dim=1)
         return user_embs, entity_embs, self.relation_emb
-
-"""
-KG attention聚合与采样
-"""
-class R_GraphConv(nn.Module):
-    def __init__(self, emb_size, edge_index, edge_type, conv_layers, n_users, n_items, n_relations):
-        super(R_GraphConv, self).__init__()
-        self.in_channel = emb_size
-        self.out_channel = emb_size
-        self.edge_index = edge_index
-        self.edge_type = edge_type
-        self.layer = conv_layers  # encode layer
-        self.n_users = n_users
-        self.n_items = n_items
-        self.n_relation = n_relations
-
-        self.comp_op = 'add'
-
-        self.convs_layers = nn.ModuleList()
-        # 只做一层
-        self.convs_layers.append(RGCNConv(self.in_channel, self.out_channel, self.n_relation))
-        self.neigh_w = nn.Linear(emb_size, emb_size)
-        nn.init.xavier_uniform_(self.neigh_w.weight)
-        self.act = nn.Tanh()
-        self.bn = nn.BatchNorm1d(emb_size)
-
-    def forward(self, entity_emb, relation_emb):
-        x = entity_emb
-        for i in range(self.layer):
-            x = self.propagate(self.edge_index, x=x, edge_type=self.edge_type, rel_emb=relation_emb)
-            x = self.neigh_w(x)
-            x = self.bn(x)
-            x = self.act(x)
-        return x[:self.n_items], relation_emb
-
-    def message(self, h, t, edge_type, rel_emb, index):
-        # 1. 获取当前边的关系 embedding
-        r_e = rel_emb[edge_type]
-
-        # 2. Composition: 邻居实体 + 关系
-        if self.comp_op == 'add':
-            comp_emb = h + r_e
-        elif self.comp_op == 'mul':
-            comp_emb = h * r_e
-        else:
-            raise NotImplementedError(f"Unknown comp_op: {self.comp_op}")
-
-        # 3. Attention: 计算注意力分数 (CompLayer 使用的是点积注意力)
-        # score = (comp_emb * target_emb).sum(-1)
-        score = (comp_emb * t).sum(dim=-1)
-
-        # 4. Softmax 归一化
-        alpha = scatter_softmax(score, index, dim=0)
-
-        # 5. 加权求和
-        return alpha.view(-1, 1) * comp_emb
 
 
 class LightGraphConv(nn.Module):
@@ -161,6 +108,70 @@ class LightGraphConv(nn.Module):
         return light_out[:self.n_users], light_out[self.n_users:]
 
 
+"""
+KG attention聚合与采样
+"""
+class AGGLayer(MessagePassing):
+    def __init__(self, channel, topk=15, comp_op='add', bn=True):
+        super(AGGLayer, self).__init__()
+        self.topk = topk
+        self.comp_op = comp_op
+        self.dim = channel
+
+        self.neigh_w = nn.Linear(channel, channel, bias=False)
+        self.act = nn.Tanh()
+        self.bn = nn.BatchNorm1d(channel) if bn else None
+
+    def forward(self, x, edge_index, edge_type, relation_emb):
+        return self.propagate(edge_index, x=x, edge_type=edge_type, rel_emb=relation_emb)
+
+    def message(self, x_j, x_i, edge_type, rel_emb, index):
+        """
+        x_j: 邻居 [E, D], x_i: 中心 [E, D]
+        index: target node id for each edge [E]
+        """
+        r_emb = rel_emb[edge_type]  # [E, D]
+
+        # composition
+        if self.comp_op == 'add':
+            comp = x_j + r_emb
+        elif self.comp_op == 'mul':
+            comp = x_j * r_emb
+        else:
+            raise ValueError
+
+        # attention score
+        score = (comp * x_i).sum(dim=-1)  # [E]
+
+        # softmax per target node
+        alpha = scatter_softmax(score, index)  # 注意：index 在 propagate 时自动传入
+
+        return comp, alpha, score
+
+    def aggregate(self, inputs, index, dim_size=None):
+        comp_msg, alpha, score = inputs
+        if self.topk > 0:
+            # TODO: 对每个中心节点采样
+            topk_score, topk_idx = torch.topk(score, k=min(self.topk, score.size(0)), dim=0, sorted=False)
+            # 构建 mask
+            mask = torch.zeros(score.size(0), device=score.device)
+            mask[topk_idx] = 1.0
+            alpha = alpha * mask
+            alpha = alpha / (alpha.sum(dim=0, keepdim=True) + 1e-12)  # renormalize
+
+        # 加权消息
+        weighted = comp_msg * alpha.unsqueeze(-1)
+        out = scatter(weighted, index, dim=0, dim_size=dim_size, reduce='sum')
+        return out
+
+    def update(self, aggr_out):
+        out = self.neigh_w(aggr_out)
+        if self.bn:
+            out = self.bn(out)
+        out = self.act(out)
+        return out
+
+
 class Disentangle2(nn.Module):
     def __init__(self, adj_mat, edge_index, edge_type, channel, n_users, n_items, n_intent, n_relation, layer):
         super(Disentangle2, self).__init__()
@@ -176,11 +187,21 @@ class Disentangle2(nn.Module):
         self.emb_size = channel
         self.convs = layer
 
+        self.rel_embs = nn.ParameterList([
+            nn.Parameter(torch.randn(self.n_relation, self.emb_size) * 0.01)
+            for _ in range(self.convs)
+        ])
         # 意图映射矩阵
-        self.L = nn.Linear(channel, channel)
-        self.S = nn.Linear(channel, channel)
+        self.L = nn.Linear(channel, channel, bias=False)
+        self.S = nn.Linear(channel, channel, bias=False)
 
-        self.agg_layer = R_GraphConv(channel, self.adj, self.edge_type, layer, n_users, n_items, n_relation)
+        self.agg_layers = nn.ModuleList([
+            AGGLayer(channel, topk=15, comp_op='add', bn=True)
+                for _ in range(layer)
+            ])
+
+        self.ent_drop = nn.Dropout(0.2)
+        self.rel_drop = nn.Dropout(0.2)
 
     def compute_corr(self, x1, x2):
         # Subtract the mean
@@ -196,16 +217,29 @@ class Disentangle2(nn.Module):
 
         return corr
 
-    def forward(self, entity_emb, r_emb):
+    def forward(self, entity_emb):
         common = self.S(entity_emb)
         private = self.L(entity_emb)
-        import pdb;pdb.set_trace()
-        for _ in range(self.convs):
-            common_agg = self.agg_layer(common, r_emb)
-            private_agg = self.agg_layer(private, r_emb)
-            cor = self.compute_corr(common_agg, private_agg)
-        return common_agg, private_agg, cor
 
+        corr_total = 0.0
+
+        for i, (layer, rel_emb) in enumerate(zip(self.agg_layers, self.rel_embs)):
+            # dropout
+            common = self.ent_drop(common)
+            private = self.ent_drop(private)
+            rel_emb = self.rel_drop(rel_emb)
+
+            common_agg = layer(common, self.edge_index, self.edge_type, rel_emb)
+            private_agg = layer(private, self.edge_index, self.edge_type, rel_emb)
+
+            # 残差链接
+            common = common + common_agg
+            private = private + private_agg
+
+            corr_total += self.compute_corr(common_agg, private_agg)
+
+        corr = corr_total / self.convs
+        return common, private, corr
 
 class GatedEncoder(nn.Module):
     def __init__(self, emb_size):
@@ -323,8 +357,8 @@ class WORK2(nn.Module):
         2. 使用LightGCN聚合用户、物品emb
         3. gate方式对用户、物品解耦
         """
-        import pdb;pdb.set_trace()
-        common, private, cor = self.decoder(self.entity_embed.weight, self.relation_embed.weight)
+        # import pdb;pdb.set_trace()
+        common, private, cor = self.decoder(self.entity_embed.weight)
         user_emb, item_emb = self.encoder(self.user_embed.weight, self.item_embed.weight)
 
         item_intent1 = self.gated_encoder(item_emb, common)
@@ -378,7 +412,6 @@ class WORK2(nn.Module):
         batch_size = users.shape[0]
         pos_scores = torch.sum(torch.mul(users, pos_items), axis=1)
         neg_scores = torch.sum(torch.mul(users, neg_items), axis=1)
-        # import pdb;pdb.set_trace()
 
         mf_loss = -1 * torch.mean(nn.LogSigmoid()(pos_scores - neg_scores))
         # L2

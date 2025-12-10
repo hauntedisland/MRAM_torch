@@ -336,12 +336,12 @@ class Disentangle(nn.Module):
         # item_int_list = [item_emb] + [item_weighted[:, i] for i in range(item_weighted.size(1))]
 
         """correlation最小化"""
-        correlations = []
-        for i in range(self.n_intent):
-            for j in range(i+1, self.n_intent):
-                corr = self.compute_corr(intent_emb[i], intent_emb[j])
-                correlations.append(corr)
-        cor = sum(correlations) if correlations else torch.tensor(0.0, device=intent_emb.device)
+        # correlations = []
+        # for i in range(self.n_intent):
+        #     for j in range(i+1, self.n_intent):
+        #         corr = self.compute_corr(intent_emb[i], intent_emb[j])
+        #         correlations.append(corr)
+        # cor = sum(correlations) if correlations else torch.tensor(0.0, device=intent_emb.device)
 
         """EGLN"""
         # user_int_list, item_int_list = [], []
@@ -362,8 +362,8 @@ class Disentangle(nn.Module):
         assert user_int_emb.shape == (self.n_users, self.emb_size * self.n_intent)
         assert item_int_emb.shape == (self.n_items, self.emb_size * self.n_intent)
 
-        # return user_int_emb, item_int_emb, user_int_list, item_int_list
-        return user_int_emb, item_int_emb, user_int_list, item_int_list, cor
+        return user_int_emb, item_int_emb, user_int_list, item_int_list
+        # return user_int_emb, item_int_emb, user_int_list, item_int_list, cor
 
     def nor_sparse_matrix(self, sparse_matrix):
         sparse_matrix = sparse_matrix.coalesce()
@@ -614,15 +614,15 @@ class MRAM(nn.Module):
 
         # 1. encoder only with gated
         enhanced_item_emb = self.gated_encoder(item_emb, kg_item_emb)
-        # return user_emb, enhanced_item_emb, None, None
+        return user_emb, enhanced_item_emb, None, None
 
         # 2. encoder + decoder
         # user_int_emb, item_int_emb, user_int_list, item_int_list = self.decoder(user_emb, enhanced_item_emb, r_emb)
         # return user_int_emb, item_int_emb, user_int_list, item_int_list
 
         # 3. encoder + decoder + corr loss
-        user_int_emb, item_int_emb, user_int_list, item_int_list, cor = self.decoder(user_emb, enhanced_item_emb, r_emb)
-        return user_int_emb, item_int_emb, user_int_list, item_int_list, cor
+        # user_int_emb, item_int_emb, user_int_list, item_int_list, cor = self.decoder(user_emb, enhanced_item_emb, r_emb)
+        # return user_int_emb, item_int_emb, user_int_list, item_int_list, cor
 
 
     def _get_kg_embedding(self, h, r, pos_t, neg_t):  # rectorch
@@ -655,17 +655,19 @@ class MRAM(nn.Module):
 
         """ decoder"""
         # 1. without corr
-        # user_int_emb, item_int_emb, user_int_list, item_int_list = self._calculate_embedding()
-        # u_e = user_int_emb[user]
-        # pos_e, neg_e = item_int_emb[pos_item], item_int_emb[neg_item]
-        # mf_loss = self.create_bpr_loss_wo_cor(u_e, pos_e, neg_e)
-
-        # 2. with corr
-        user_int_emb, item_int_emb, user_int_list, item_int_list, cor = self._calculate_embedding()
+        user_int_emb, item_int_emb, user_int_list, item_int_list = self._calculate_embedding()
         u_e = user_int_emb[user]
         pos_e, neg_e = item_int_emb[pos_item], item_int_emb[neg_item]
-        mf_loss = self.create_bpr_loss(u_e, pos_e, neg_e, cor)
+        mf_loss = self.create_bpr_loss_wo_cor(u_e, pos_e, neg_e)
         total_loss = mf_loss
+
+        # 2. with corr
+        # user_int_emb, item_int_emb, user_int_list, item_int_list, cor = self._calculate_embedding()
+        # u_e = user_int_emb[user]
+        # pos_e, neg_e = item_int_emb[pos_item], item_int_emb[neg_item]
+        # mf_loss = self.create_bpr_loss(u_e, pos_e, neg_e, cor)
+        # total_loss = mf_loss
+        # return total_loss, cor
 
         """使用正交loss"""
         # loss_orth_u = self.calculate_orthogonal_loss(user_int_emb)

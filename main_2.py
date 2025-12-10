@@ -114,7 +114,7 @@ if __name__ == '__main__':
 
     """define model"""
     model = WORK2(n_params, args, kg_graph, adj_mats, adj_mean_mat).to(device)
-    # model = MRAM(n_params, args, ckg_graph, adj_mats, adj_mean_mat).to(device)
+
     print(model)
     """define optimizer"""
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
