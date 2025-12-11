@@ -13,8 +13,6 @@ from torch_scatter import scatter_sum, scatter, scatter_softmax
 import math
 from einops import rearrange, repeat, einsum
 
-# import dgl
-# import dgl.function as fn
 
 init = nn.init.xavier_uniform_
 
@@ -150,15 +148,37 @@ class AGGLayer(MessagePassing):
 
     def aggregate(self, inputs, index, dim_size=None):
         comp_msg, alpha, score = inputs
-        if self.topk > 0:
-            # TODO: 对每个中心节点采样
-            topk_score, topk_idx = torch.topk(score, k=min(self.topk, score.size(0)), dim=0, sorted=False)
-            # 构建 mask
-            mask = torch.zeros(score.size(0), device=score.device)
-            mask[topk_idx] = 1.0
-            alpha = alpha * mask
-            alpha = alpha / (alpha.sum(dim=0, keepdim=True) + 1e-12)  # renormalize
+        if self.topk > 0 and score.numel() > 0:
+            # 按节点分组边
+            sorted_idx, perm = torch.sort(index)
+            sorted_score = score[perm]
+            # 统计节点边数
+            node_counts = torch.bincount(index, minlength=dim_size)
+            # 构建连续索引指针(累计和)，快速定位每个节点的边的范围. [n_node + 1]
+            ptr = torch.cat([torch.zeros(1, dtype=torch.long, device=index.device),
+                            node_counts.cumsum(0)])
 
+            topk_sorted_indices = []
+            for i in range(len(ptr)-1):
+                # 遍历每个节点
+                s, e = ptr[i].item(), ptr[i+1].item()
+                if e - s == 0:
+                    continue
+                k = min(self.topk, e-s)
+                if k > 0:
+                    # 对节点的边进行topk选择，将选择的边存储在topk_sorted_indices中
+                    _, topk_local = torch.topk(sorted_score[s:e], k=k)
+                    topk_sorted_indices.append(s + topk_local)
+
+            if topk_sorted_indices:
+                # 将局部选择的边索引转换为全局的边索引.所有被选择的边的索引
+                topk_global_sorted_idx = torch.cat(topk_sorted_indices)
+                selected_edge_idx = perm[topk_global_sorted_idx]
+            else:
+                print("false")
+        # 构建mask，标记被选择的边
+        mask = torch.zeros(score.size(0), device=score.device, dtype=torch.bool)
+        mask[selected_edge_idx] = True
         # 加权消息
         weighted = comp_msg * alpha.unsqueeze(-1)
         out = scatter(weighted, index, dim=0, dim_size=dim_size, reduce='sum')
@@ -359,12 +379,17 @@ class WORK2(nn.Module):
         """
         # import pdb;pdb.set_trace()
         common, private, cor = self.decoder(self.entity_embed.weight)
-        user_emb, item_emb = self.encoder(self.user_embed.weight, self.item_embed.weight)
+        item_common  = common[:self.n_items]   # [n_items, dim]
+        item_private = private[:self.n_items]  # [n_items, dim]
+        user_emb_cf, item_emb_cf = self.encoder(self.user_embed.weight, self.item_embed.weight)
 
-        item_intent1 = self.gated_encoder(item_emb, common)
-        item_intent2 = self.gated_encoder(item_emb, private)
-        enhanced_item_emb = item_intent1 + item_intent2     # TODO:融合策略；用户解耦
-        return user_emb, enhanced_item_emb, cor
+        # item_intent1 = self.gated_encoder(item_emb, item_common)
+        # item_intent2 = self.gated_encoder(item_emb, item_private)
+        gate_common  = self.gated_encoder(item_emb_cf, item_common)
+        gate_private = self.gated_encoder(item_emb_cf, item_private)
+        enhanced_item_emb = item_emb_cf + item_emb_cf * gate_common + item_emb_cf * gate_private
+        # TODO:融合策略；用户解耦
+        return user_emb_cf, enhanced_item_emb, cor
 
     def forward(self, batch=None):
         user = batch['users']
